@@ -1,10 +1,15 @@
 ---
 name: project-onboarding
 description: >
-  Systematic project onboarding for unfamiliar codebases. Use when user says
-  "onboard", "understand this project", "what does this codebase do",
-  "help me get started", "set up CLAUDE.md", "map the architecture",
-  or when starting work on a new/unfamiliar project.
+  Scan an unfamiliar codebase, generate CLAUDE.md + OVERVIEW.md, and capture
+  domain knowledge that code alone can't tell you. Use this skill whenever the
+  user wants to understand a new project, onboard onto a codebase, set up
+  project documentation, create or update CLAUDE.md, map project architecture,
+  or says things like "what does this project do", "help me get started",
+  "I just joined this repo", "document this codebase", "set up dev docs".
+  Also use when starting work on any unfamiliar or inherited project, even if
+  the user doesn't explicitly ask for onboarding — if they seem lost in a new
+  codebase, this skill can help.
 user-invocable: true
 allowed-tools:
   - Read
@@ -28,18 +33,19 @@ and capturing domain knowledge that cannot be derived from code alone.
 > the conflict and the user designates the single source of truth.
 > You never decide on your own.
 
-## Responsibility Boundaries — READ CAREFULLY
+## Responsibility Boundaries
 
 ### Two Zones — Source Zone vs Doc Zone
 
-**Source Zone (STRICTLY read-only):**
+**Source Zone (read-only):**
 All project source code, config files, scripts, and existing business docs.
-You may READ them. You may NEVER modify, delete, or move them.
+You read and analyze these to extract facts — but never modify them, because
+changing source during onboarding would be out of scope and risky.
 
 **Doc Zone (write with user approval):**
 Files this skill generates or takes over: CLAUDE.md, docs/OVERVIEW.md,
-memory files. You may WRITE or EDIT these, but ONLY after user confirms
-the content AND the security check passes.
+memory files. You write or edit these after the user reviews the content
+and the security check passes.
 
 **Zone Transition:** If a file like CLAUDE.md already exists in the project,
 it starts in Source Zone (read-only). When the user explicitly chooses
@@ -47,30 +53,25 @@ Keep & enhance, Patch, or Rebuild for that file in Phase 0, it transfers
 to Doc Zone for the current session. Files the user chooses to Skip
 remain in Source Zone and are never touched.
 
-### You MUST:
-- Treat Source Zone as strictly read-only — scan and extract, never touch
-- Get user confirmation + pass security check before writing any Doc Zone file
-- Back every claim in generated docs with a source file path
-- Present all conflicts for user decision
+### Do:
+- Scan and extract from Source Zone, never modify it
+- Get user confirmation + pass security check before writing Doc Zone files
+- Cite a source file for every claim in generated docs
+- Present conflicts with evidence from both sides for user decision
 - Separate "extracted from code" and "user-provided" content in memory files
 
-### You MUST NOT:
+### Don't:
 - Modify, delete, or move any Source Zone file
-- Run build, test, install, or any side-effect command
-- Guess or fabricate business logic
-- Auto-resolve conflicts between docs and code
-- Auto-redact sensitive information
-- Force users to continue to the next phase
-- Duplicate content that already exists in project docs (reference it instead)
+- Run build, test, install, or any command that changes project state
+- Guess or fabricate business logic — if unsure, ask the user
+- Auto-resolve conflicts or auto-redact sensitive info
+- Push users to continue to the next phase — they stop when they want
+- Duplicate content from existing docs (reference it instead)
 
-### Bash Restrictions
-The Bash tool is ONLY allowed for these read-only operations:
-- `git ls-files` — list tracked files
-- `git log` — read commit history
-- `wc -l` — count lines/files
-- `ls` / `find` (for directory structure only)
-
-Any other Bash usage is FORBIDDEN. Use Glob/Grep/Read instead.
+### Bash Usage
+Keep Bash to read-only operations: `git ls-files`, `git log`, `wc -l`,
+`ls`, `find`. For everything else, prefer Glob/Grep/Read — they're faster
+and safer.
 
 ---
 
@@ -134,7 +135,7 @@ its claims match the actual code (see Step 0.3).
 
 **Layer 2 — Scale** (always run):
 - Count tracked files: `git ls-files | wc -l` (or Glob if not a git repo)
-- Top-level directory file distribution (count only, do NOT list every file)
+- Top-level directory summary: file count per directory + one-line description
 - Identify key directories: src, app, lib, test, docs, scripts, deploy, config
 
 **Layer 3 — Key info** (read selectively, do NOT read entire codebase):
@@ -145,14 +146,16 @@ its claims match the actual code (see Step 0.3).
 
 ### Step 0.3: Conflict Detection
 
-Cross-reference existing AI files against code to find contradictions.
+Cross-reference all documentation (existing AI files, README.md, manifest
+descriptions, metadata files) against actual code to find contradictions.
 
 | Conflict Type | How to Detect |
 |--------------|--------------|
 | Dead command | Doc mentions a script command not in manifest |
 | Stale port/path | Doc says one port, config file says another |
 | Tech stack mismatch | Doc claims framework X, dependencies show framework Y |
-| Cross-file contradiction | Two AI files disagree on the same fact |
+| Cross-file contradiction | Two docs disagree on the same fact |
+| Stale metadata | package.json description or keywords don't match actual code |
 
 ### Step 0.4: Present Results
 
@@ -172,8 +175,11 @@ Output a scan report:
 **Conflicts**: {count} found
 {list each conflict with both sources, ask user which is correct}
 
+**Documentation language**: {detected dominant language from README/comments}
+
 **Recommended actions**:
-1. CLAUDE.md — [Keep & enhance] / [Patch conflicts] / [Rebuild] / [Skip]?
+1. CLAUDE.md — {if exists: [Keep & enhance] / [Patch conflicts] / [Rebuild] / [Skip]}
+                {if not exists: [Generate] / [Skip]}
 2. {other AI file} rules — [Merge into CLAUDE.md] / [Ignore]?
 3. docs/OVERVIEW.md — [Generate] / [Skip]?
 ```
@@ -482,18 +488,27 @@ Safe to re-run. Never creates duplicate or contradictory documentation.
 
 ---
 
-## Iron Laws
+## Guiding Principles
 
-1. **Source Zone is read-only** — never modify source code, configs, or scripts;
-   only write Doc Zone files (CLAUDE.md, OVERVIEW.md, memory) with user approval
-2. **Never run side-effect commands** — no build, test, install, deploy, or
-   any command that changes project state
-3. **Every claim needs a code source** — no fabrication, no guessing
-4. **User decides all conflicts** — present evidence, never judge
-5. **User confirms all writes** — no file touches disk without explicit approval
-6. **Security check is blocking** — sensitive info found = write blocked until resolved
-7. **Facts and supplements are separated** — memory files clearly mark provenance
-8. **Template is maximum, not minimum** — skip sections with no data
+These principles exist because onboarding docs that contain errors, leak
+secrets, or overwrite team work cause more harm than having no docs at all.
+
+1. **Source Zone is read-only** — modifying source code during onboarding would
+   be dangerous and out of scope. Only write Doc Zone files with user approval.
+2. **No side-effect commands** — running build/test/install could break the
+   user's environment. Stick to read-only commands (git ls-files, wc, ls).
+3. **Every claim cites a source** — undocumented "facts" erode trust. If you
+   can't point to a file, don't state it as fact — frame it as a question.
+4. **User decides conflicts** — you see the code, but the user knows the
+   context. Present evidence from both sides and let them call it.
+5. **User confirms writes** — onboarding output should feel collaborative, not
+   imposed. Show the draft, get a thumbs-up, then write.
+6. **Security check before writes** — credentials in docs are a common source
+   of leaks, especially when docs get committed to public repos.
+7. **Separate facts from context** — memory files mark what came from code vs
+   what the user told you, so future readers know what to trust and verify.
+8. **Template is maximum, not minimum** — empty sections create noise. If
+   there's no port config, skip the ports section rather than writing "N/A".
 
 ## Anti-Patterns
 
