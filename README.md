@@ -1,39 +1,110 @@
 # claude-skills
 
-A collection of Claude Code skills for real-world development workflows.
+Practical Claude Code skills born from real production projects, not templates.
 
-## Install
+## Skills
+
+### project-onboarding
+
+**The fastest way to understand an unfamiliar codebase with Claude Code.**
 
 ```bash
-# Install a specific skill
-npx skills add hyc-deep/claude-skills@project-onboarding
+npx skills add Wubabalala/claude-skills@project-onboarding
 ```
 
-## Available Skills
+Then in Claude Code:
+```
+/onboard
+```
 
-| Skill | Description | Status |
-|-------|-------------|--------|
-| [project-onboarding](skills/project-onboarding/) | Systematic project onboarding — scan codebase, generate CLAUDE.md + OVERVIEW.md, capture domain knowledge | v1.0 |
+#### The Problem
 
-## Principles
+You join a new project. You spend hours reading scattered docs, guessing build commands, figuring out which configs matter. Existing "onboarding" tools dump a directory listing and call it done.
 
-Every skill in this collection follows these principles:
+#### What This Skill Actually Does
 
-- **Source-safe** — never modifies source code; only writes documentation
+```
+Phase 0: Detect & Scan
+  ├── Finds existing AI files (CLAUDE.md, .cursorrules, AGENTS.md, .windsurfrules...)
+  ├── Scans project structure coarse-to-fine (type → scale → key info)
+  ├── Cross-checks docs against code — surfaces stale commands, wrong ports, outdated claims
+  └── You decide: keep / patch / rebuild / skip each file
+
+Phase 1: Generate Core Docs
+  ├── CLAUDE.md — every claim backed by a source file path
+  ├── Per-module CLAUDE.md (monorepo auto-detected)
+  ├── docs/OVERVIEW.md — one-page project navigator
+  └── Security scan blocks writes if credentials detected
+
+Phase 2: Deep Dive (optional)
+  ├── Recommends dimensions based on what it found (deploy scripts → ask about deployment)
+  ├── Asks "WHY was it designed this way?" — captures what code can't tell you
+  └── Writes memory files with clear fact vs user-knowledge separation
+```
+
+#### Why Not Just Read the Code?
+
+Code tells you **what** exists. It doesn't tell you:
+- Why there are two auth systems (legal required SSO for one, JWT for the other)
+- Why deploys must run macOS before Windows
+- Which config change broke prod last month
+- That the `test` script in package.json hasn't worked since the migration
+
+This skill extracts facts from code, then **asks you the questions that matter**.
+
+#### How It's Different from Other Onboarding Skills
+
+| | project-onboarding (this) | agent-studio | goodvibes |
+|---|---|---|---|
+| Detects existing AI files | 8 tools (.cursorrules, AGENTS.md, .windsurfrules...) | memory dir only | no |
+| Finds stale/wrong docs | yes, cross-checks against code | no | no |
+| Fixes stale docs | Patch mode (targeted before/after diffs) | no | no |
+| Captures domain knowledge | Phase 2: asks "why", separates facts from context | no | no |
+| Security scan | blocks writes if passwords/keys/IPs found | no | no |
+| Monorepo support | auto-detected, per-module CLAUDE.md | no | partial |
+| Source code safety | Source Zone / Doc Zone model, never touches code | not defined | not defined |
+
+#### Example Output
+
+After running `/onboard` on a microservices project:
+
+```
+Scan Results
+
+Project type: Java (Spring Cloud) + Next.js + Python (FastAPI)
+Scale: 1,247 files, 7 modules
+Build tools: Maven, pnpm, uv
+
+Existing AI files:
+  CLAUDE.md (root) — Covers: build commands | Missing: service topology, deployment
+  .cursorrules — Covers: code style | Conflict: claims React, project uses Vue
+
+Conflicts: 1 found
+  .cursorrules says "React", package.json has "vue": "^3.4" → Which is correct? [Code] / [Doc]
+
+Recommended actions:
+  1. CLAUDE.md — [Keep & enhance] / [Patch conflicts] / [Rebuild] / [Skip]?
+  2. .cursorrules — [Merge into CLAUDE.md] / [Ignore]?
+  3. docs/OVERVIEW.md — [Generate] / [Skip]?
+```
+
+#### Design Principles
+
+- **Code is fact, documentation is claim** — conflicts surfaced, user decides
+- **Source-safe** — never modifies source code or configs; only writes doc files
 - **User confirms all writes** — nothing touches disk without approval
-- **Practical over theoretical** — born from real project workflows, not templates
+- **Template is maximum, not minimum** — sections skipped if not applicable
+- **Ask "why", not "what"** — code scanning is commodity; asking the right questions is the value
 
-## Adding a New Skill
+---
 
-Each skill lives in `skills/{skill-name}/` with at minimum a `SKILL.md` file.
+## All Skills
 
-```
-skills/
-  project-onboarding/
-    SKILL.md          # Skill prompt (required)
-  {next-skill}/
-    SKILL.md
-```
+| Skill | One-liner | Install |
+|-------|-----------|---------|
+| **[project-onboarding](skills/project-onboarding/)** | Scan codebase, generate docs, capture domain knowledge | `npx skills add Wubabalala/claude-skills@project-onboarding` |
+
+More skills coming. Each one is built from real production workflows.
 
 ## License
 
