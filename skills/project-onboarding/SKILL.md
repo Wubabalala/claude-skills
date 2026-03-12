@@ -142,22 +142,13 @@ Run Layer 1 and Layer 2 **in parallel with Step 0.1** — they are independent.
 - Interpret results to determine: tech stack, build tools, monorepo yes/no,
   scale, key directories
 
-**Layer 3 — Key info** (token-conscious selective reading):
-
-Priority files (always read if they exist):
-- Main manifest file (package.json / pom.xml / pyproject.toml — just one)
-- README.md (first 80 lines only for large files)
-- Dockerfile / docker-compose.yml (if found)
-
-Secondary files (read only if needed for conflict detection or gap filling):
-- Additional manifests (tsconfig.json, metadata.json, etc.)
-- CI/CD configs, .env.example
-- Supplementary docs (only if README is sparse)
-
-**Skip these** — they rarely contain onboarding-relevant info:
-- Lock files (package-lock.json, pnpm-lock.yaml, etc.)
-- Tool configs (postcss.config.js, tailwind.config.js, .eslintrc, etc.)
-- Source code files — defer to Phase 1/2 when actually needed
+**Layer 3 — Key info** (read selectively, do NOT read entire codebase):
+- Read manifest files found in Layer 1 for dependencies and script commands
+- Read build/dev configs (vite.config, webpack.config, tsconfig, etc.)
+- Read CI/CD configs (`.github/workflows/`, `Jenkinsfile`, `Dockerfile`)
+- Read `.env.example` or `.env.template` for environment variables
+- Read README.md and files in docs/ (if they exist)
+- **Skip**: lock files (package-lock.json, pnpm-lock.yaml) and generated files
 
 Batch all Layer 3 reads into a single parallel round.
 
