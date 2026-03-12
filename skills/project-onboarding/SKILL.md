@@ -97,9 +97,23 @@ Security check runs before ANY file is written to disk.
 One pass, two objectives: detect existing AI files + scan project structure.
 All operations are read-only.
 
+**Efficiency rule: batch tool calls aggressively.** Steps 0.1 and 0.2 should
+run in parallel where possible. Prefer fewer, broader queries over many
+narrow ones — a single Glob that returns empty is fine; 8 separate Globs
+that all return empty is wasteful.
+
 ### Step 0.1: Detect Existing AI-Assisted Files
 
-Scan for these files/directories. When found, read and assess coverage.
+Use these 3 Glob calls **in parallel** to cover all AI files:
+
+1. `Glob("**/{CLAUDE,AGENTS}.md")` — finds root + nested CLAUDE.md and AGENTS.md
+2. `Glob(".{claude,cline,cursor,trae}/**")` — AI tool config directories
+3. `Glob("{.cursorrules,.windsurfrules,.clinerules,.github/copilot-instructions.md,docs/OVERVIEW.md}")` — root dotfiles and remaining single files
+
+This is 3 tool calls total. Each Glob that returns empty simply means
+those AI tools aren't configured — don't mention absent files in the report.
+
+AI file reference (for interpreting results):
 
 | File / Directory | Source Tool |
 |-----------------|------------|
@@ -113,36 +127,29 @@ Scan for these files/directories. When found, read and assess coverage.
 | `.clinerules` / `.cline/` | Cline |
 | `docs/OVERVIEW.md` | This skill's prior output |
 
-For each found file, note: what topics it covers, what's missing, and whether
-its claims match the actual code (see Step 0.3).
+Only read and assess files that actually exist. Skip further analysis for
+files not found — don't mention them in the report.
 
 ### Step 0.2: Project Structure Scan (Coarse → Fine)
 
-**Layer 1 — Project type** (always run):
-- Scan root for manifest files to determine tech stack:
-  - `package.json` → Node.js/JS/TS
-  - `pom.xml` / `build.gradle` → Java
-  - `pyproject.toml` / `requirements.txt` / `setup.py` → Python
-  - `go.mod` → Go
-  - `Cargo.toml` → Rust
-  - `composer.json` → PHP
-  - `*.sln` / `*.csproj` → .NET
-  - Multiple of the above → Multi-language
-- Detect monorepo indicators:
-  - `pnpm-workspace.yaml`, `lerna.json`, `turbo.json`, `nx.json`
-  - Multiple sub-directory manifest files (e.g., `modules/*/pom.xml`)
-- Detect build tools (Maven/Gradle/Vite/Webpack/Cargo/Make, etc.)
+Run Layer 1 and Layer 2 **in parallel with Step 0.1** — they are independent.
 
-**Layer 2 — Scale** (always run):
-- Count tracked files: `git ls-files | wc -l` (or Glob if not a git repo)
-- Top-level directory summary: file count per directory + one-line description
-- Identify key directories: src, app, lib, test, docs, scripts, deploy, config
+**Layer 1 + 2 combined** (3 parallel calls):
+- `Glob("*.{json,xml,toml,gradle,mod,sln,csproj,yaml}")` — catches all
+  manifest files AND monorepo indicators in one query
+- `git ls-files | wc -l` — file count
+- `ls` — top-level directory listing
+- Interpret results to determine: tech stack, build tools, monorepo yes/no,
+  scale, key directories
 
 **Layer 3 — Key info** (read selectively, do NOT read entire codebase):
-- Read manifest files for dependencies and script commands
+- Read manifest files found in Layer 1 for dependencies and script commands
 - Read CI/CD configs (`.github/workflows/`, `Jenkinsfile`, `Dockerfile`)
 - Read `.env.example` or `.env.template` for environment variables
 - Read README.md and files in docs/ (if they exist)
+
+Layer 3 reads should also be batched — read all discovered manifest and
+config files in a single parallel round.
 
 ### Step 0.3: Conflict Detection
 
