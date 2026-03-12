@@ -2,14 +2,14 @@
 name: project-onboarding
 description: >
   Scan an unfamiliar codebase, generate CLAUDE.md + OVERVIEW.md, and capture
-  domain knowledge that code alone can't tell you. Use this skill whenever the
-  user wants to understand a new project, onboard onto a codebase, set up
-  project documentation, create or update CLAUDE.md, map project architecture,
-  or says things like "what does this project do", "help me get started",
-  "I just joined this repo", "document this codebase", "set up dev docs".
-  Also use when starting work on any unfamiliar or inherited project, even if
-  the user doesn't explicitly ask for onboarding — if they seem lost in a new
-  codebase, this skill can help.
+  domain knowledge that code alone can't tell you. This skill should be used
+  when the user wants to understand a new project, onboard onto a codebase,
+  set up project documentation, create or update CLAUDE.md, or map project
+  architecture. Common triggers include "what does this project do", "help me
+  get started", "I just joined this repo", "document this codebase", "set up
+  dev docs". Also applies when working on any unfamiliar or inherited project,
+  even without an explicit onboarding request — if the user seems lost in a
+  new codebase, this skill can help.
 user-invocable: true
 allowed-tools:
   - Read
@@ -377,121 +377,55 @@ For EACH selected dimension, execute this flow sequentially:
 **Scan** — Extract all related code/config for this dimension using
 Grep/Glob/Read. Collect file paths, patterns, and factual findings.
 
-**Present** — Show user what was found, with file path citations.
+**Infer** — Before asking the user anything, attempt to answer "why" from
+code evidence. Cross-reference patterns, naming conventions, comments,
+commit history, and structural choices to form hypotheses. Mark each
+inference with a confidence level (high/medium/low). Only questions that
+remain low-confidence or unanswerable from code proceed to Ask.
 
-**Ask** — This is the critical step. Ask the user:
-> "Above is what I extracted from code. Is there anything important about
-> {dimension} that ISN'T visible in the code? For example:
-> - Why was it designed this way?
-> - What went wrong in the past?
-> - What would a new team member get wrong?"
+**Present** — Show user: (1) extracted facts with citations, (2) your
+inferences marked with confidence. This lets the user confirm, correct,
+or skip — rather than answering from scratch.
 
-**Collect** — User provides supplemental knowledge (or says "nothing to add").
+**Ask** — Only ask what code genuinely cannot answer. Frame questions as
+specific, verifiable hypotheses rather than open-ended prompts:
+> BAD: "Why was it designed this way?"
+> GOOD: "The proxy has no rate-limiting logic — is this because upstream
+>        quotas are sufficient, or is this a known gap?"
+
+**Collect** — User provides supplemental knowledge, or says "I don't know".
+If the user cannot answer (true newcomer), promote high/medium-confidence
+inferences from the Infer step into the memory file, marked as
+`[inferred — to be verified]`. This ensures Phase 2 still produces useful
+output even when no one with project history is present.
 
 **Generate** — Create a memory file draft. Run security check. Show to user
 for approval before writing.
 
-### Step 2.3: Memory File Format
+### Step 2.3: Memory File Format & Storage
 
-Each dimension produces one memory file. Use `type: project` for knowledge
-about this project's design/workflows/decisions. Use `type: reference` for
-pointers to external systems (e.g., "bugs tracked in Linear project X",
-"monitoring dashboard at grafana.internal/d/xxx").
-
-```markdown
----
-name: {dimension name}
-description: {one-line description for future retrieval}
-type: {project | reference}
-source: project-onboarding skill
-created: {YYYY-MM-DD}
----
-
-## Extracted from Code
-{Factual findings with file path citations.
-Example: "Service A calls Service B via Feign (see `src/feign/ServiceBClient.java:15`)"}
-
-## Supplemental Knowledge
-{User-provided context that is NOT in the code.
-Example: "Dual auth exists because legal required SSO for external users
-while internal admin needed lightweight JWT for faster iteration."}
-```
-
-### Memory Storage Location
-
-Use a fallback chain to determine where to store memory files:
-
-1. **Existing memory dir** — if `.claude/projects/.../memory/` or
-   `.claude/memory/` already exists, use it
-2. **Project-level .claude** — if `.claude/` exists at project root, create
-   `memory/` inside it
-3. **Fallback** — create `.project-memory/` at project root (tool-agnostic,
-   easy to gitignore)
-
-Ask user to confirm the chosen path before writing the first memory file.
-If creating a new directory, suggest adding it to `.gitignore` — memory
-files may contain team-specific context not suited for version control.
-
-After writing memory files, update or create `MEMORY.md` index in the same
-directory with one-line links to each memory file.
+Each dimension produces one memory file with two sections: "Extracted from
+Code" (facts with citations) and "Supplemental Knowledge" (user-provided
+context). See `references/memory-file-spec.md` for full format template
+and storage location fallback chain.
 
 ### Phase 2 Rules
 
 1. **One file per dimension** — no monolithic knowledge dumps
 2. **Separate facts from supplements** — always use the two-section format
 3. **Do not force capture** — if user says "nothing to add" or "done", move on
-4. **Ask "why", not "what"** — code tells you what exists; ask why it's that way
+4. **Infer before asking** — exhaust code evidence first; only ask what
+   code genuinely cannot answer
 5. **Run security check** before writing each memory file
 
 ---
 
 ## Security Check
 
-**This procedure runs before ANY file is written to disk.**
-**It applies to ALL phases — Phase 1 docs AND Phase 2 memory files.**
-
-### Scan Rules
-
-Scan the full content of each file about to be written. Flag any match:
-
-| Type | What to Look For |
-|------|-----------------|
-| Passwords | plaintext passwords, `password=xxx`, `-p{password}`, `passwd` |
-| Tokens / Keys | API keys, `sk-xxx`, `AKIA...`, bearer tokens, secret keys |
-| Private keys | `-----BEGIN.*PRIVATE KEY-----` |
-| Connection strings | JDBC/Redis/Mongo/AMQP URLs containing credentials |
-| IP + credential combos | IP addresses paired with passwords or key file paths |
-| Internal hostnames + auth | Intranet URLs with embedded usernames or passwords |
-
-### When Sensitive Content Is Found
-
-**BLOCK the file write.** Present each finding to the user:
-
-```
-## Security Check: {n} Sensitive Items Found in {filename}
-
-1. Line {n}:
-   Content: "{matched content}"
-   Type: {type from table above}
-   -> [Redact to placeholder] / [Keep as-is] / [Remove line]
-
-2. Line {n}:
-   ...
-```
-
-Redaction placeholder format — replace the sensitive value only:
-```
-ssh -i {SSH_KEY_PATH} {USER}@{SERVER_IP}
-password: {DB_PASSWORD}
-jdbc:mysql://{DB_HOST}:{DB_PORT}/{DB_NAME}
-```
-
-### Security Rules
-
-- **Blocking**: the file is NOT written until EVERY finding is resolved
-- **No auto-redact**: user must confirm each item individually
-- **Full scope**: every output file is scanned, no exceptions
-- **Re-scan after edits**: if user asks to modify generated content, re-scan
+Before writing ANY file to disk (Phase 1 docs or Phase 2 memory files),
+run the security scan procedure. It blocks writes until all findings are
+resolved by the user. See `references/security-check.md` for full scan
+rules, sensitive content types, redaction format, and blocking behavior.
 
 ---
 
@@ -532,14 +466,6 @@ secrets, or overwrite team work cause more harm than having no docs at all.
 
 ## Anti-Patterns
 
-| Anti-Pattern | Why It Fails | Correct Approach |
-|-------------|-------------|-----------------|
-| Guessing business logic from code structure | Plausible-sounding but wrong docs mislead | Only state facts; ask user for "why" in Phase 2 |
-| Auto-redacting sensitive info | May break user intent or miss context | Present each finding, user decides |
-| Generating docs without reading existing ones | Overwrites team's work | Detect first, let user choose keep/enhance/patch/rebuild |
-| Scanning everything at full detail | Wastes tokens on large codebases | Coarse-to-fine: count -> files -> content |
-| Forcing all dimensions in Phase 2 | Overwhelms user, low signal-to-noise | Recommend based on evidence, user selects |
-| Copying README content into CLAUDE.md | Duplication that drifts apart over time | Reference existing docs, don't duplicate |
-| Running build/test to "validate" | Out of scope, may cause side effects | Read-only only. Document commands, don't run them |
-| Writing sensitive data to docs | Security risk, especially for public repos | Security scan blocks all writes until resolved |
-| Only appending to stale docs | "Found problem but can't fix it" | Offer Patch mode for targeted fixes with user approval |
+See `references/anti-patterns.md` for the full table of common mistakes
+and their correct approaches (guessing business logic, auto-redacting,
+scanning everything at full detail, etc.).
