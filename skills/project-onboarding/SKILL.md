@@ -282,6 +282,39 @@ One-page project navigator. Skip sections with no data.
 {Project type and module relationships, inferred from directory structure
 and inter-module references. Keep factual — do not speculate on design intent.}
 
+### Architecture Diagram
+{Generate a Mermaid diagram showing the high-level architecture.
+Pick the most appropriate diagram type based on project structure:
+
+- **graph TD** — for layered architectures (UI → Service → DB)
+- **graph LR** — for pipeline/data-flow projects
+- **flowchart** — for multi-service systems with branching
+
+Rules:
+- Only include modules/layers that actually exist in the codebase
+- Label edges with the communication method when detectable
+  (e.g., REST, gRPC, import, Feign, message queue)
+- Keep to ≤15 nodes — group small modules into a single node if needed
+- Use subgraph to group related modules (e.g., frontend, backend, infra)
+- Skip this section if the project is too simple (≤3 top-level dirs)
+
+Example for a typical web app:
+```mermaid
+graph TD
+    subgraph Frontend
+        UI[React App]
+    end
+    subgraph Backend
+        API[API Server]
+        SVC[Service Layer]
+        DB[(Database)]
+    end
+    UI -->|REST| API
+    API --> SVC
+    SVC --> DB
+```
+}
+
 ## Module / Component Quick Reference
 | Module / Layer | Tech Stack | Entry Point | Description |
 |----------------|-----------|-------------|-------------|
