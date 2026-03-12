@@ -216,7 +216,10 @@ Based on user's Phase 0 choice:
 
 Detect the dominant language of the project's existing documentation
 (README.md, code comments, existing docs). Generate all output in that
-language. If no docs exist, default to English.
+language. If no docs exist, default to English. For mixed-language projects
+(e.g., English README + Chinese comments), prefer the language used in the
+majority of user-facing docs, and mention the choice in the Phase 0 report
+so the user can override.
 
 ### CLAUDE.md Template (Root)
 
@@ -271,10 +274,10 @@ One-page project navigator. Skip sections with no data.
 {Project type and module relationships, inferred from directory structure
 and inter-module references. Keep factual — do not speculate on design intent.}
 
-## Module Quick Reference
-| Module | Tech Stack | Entry Point | Description |
-|--------|-----------|-------------|-------------|
-{One row per module/sub-directory. From manifest files and directory scanning.}
+## Module / Component Quick Reference
+| Module / Layer | Tech Stack | Entry Point | Description |
+|----------------|-----------|-------------|-------------|
+{One row per module, sub-directory, or logical layer. From manifest files and directory scanning.}
 
 ## Ports
 {From config files (application.yml, .env, docker-compose, etc.).
@@ -338,6 +341,10 @@ user selects which to capture.**
 | Complex state transitions (enum states, status fields, workflow code) | Core business flows |
 | CI/CD configuration files (.github/workflows/, Jenkinsfile) | CI/CD pipeline |
 | Multiple database connections / data source configs | Data architecture |
+| Third-party API clients, SDK wrappers, or proxy endpoints | External API integration |
+| Complex component hierarchy, shared UI libraries, design system deps | UI component architecture |
+| State management libraries (Redux/Zustand/Pinia) or complex context trees | State management |
+| LocalStorage/IndexedDB/OPFS usage, offline-first patterns, sync logic | Local storage & data sync |
 
 Present to user:
 
@@ -378,7 +385,10 @@ for approval before writing.
 
 ### Step 2.3: Memory File Format
 
-Each dimension produces one memory file:
+Each dimension produces one memory file. Use `type: project` for knowledge
+about this project's design/workflows/decisions. Use `type: reference` for
+pointers to external systems (e.g., "bugs tracked in Linear project X",
+"monitoring dashboard at grafana.internal/d/xxx").
 
 ```markdown
 ---
@@ -411,6 +421,8 @@ Use a fallback chain to determine where to store memory files:
    easy to gitignore)
 
 Ask user to confirm the chosen path before writing the first memory file.
+If creating a new directory, suggest adding it to `.gitignore` — memory
+files may contain team-specific context not suited for version control.
 
 After writing memory files, update or create `MEMORY.md` index in the same
 directory with one-line links to each memory file.
