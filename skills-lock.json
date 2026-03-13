@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "skills": {
+    "project-onboarding": {
+      "source": "Wubabalala/claude-skills",
+      "sourceType": "github",
+      "computedHash": "10fa1ee9f7d1818adeaccdd21cca6b6642aa061924ac34b4e3b1ce70f90998f0"
+    },
+    "code-review": {
+      "source": "Wubabalala/claude-skills",
+      "sourceType": "github"
+    }
+  }
+}
