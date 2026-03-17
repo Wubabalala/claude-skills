@@ -9,6 +9,10 @@
     "code-review": {
       "source": "Wubabalala/claude-skills",
       "sourceType": "github"
+    },
+    "playwright-web-automation": {
+      "source": "Wubabalala/claude-skills",
+      "sourceType": "github"
     }
   }
 }

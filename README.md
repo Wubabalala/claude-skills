@@ -98,11 +98,58 @@ Recommended actions:
 
 ---
 
+### playwright-web-automation
+
+**Browser automation that goes beyond recording — render diagrams, automate interactions, export screenshots.**
+
+```bash
+npx skills add Wubabalala/claude-skills@playwright-web-automation
+```
+
+#### Two Modes
+
+| Mode | When to use | How it works |
+|------|-------------|--------------|
+| **A: Record** | Unknown page, need to explore | `npx playwright codegen <URL>` → paste recorded code → parameterize |
+| **B: Direct** | Known workflow or render-to-image | Write script directly, skip recording |
+
+#### What It Handles
+
+- **Web interaction** — fill forms, click buttons, navigate multi-step flows, handle login state
+- **Diagram rendering** — Mermaid, custom HTML/SVG → high-res PNG export
+- **Canvas export** — extract rendered content from Canvas elements (even inside iframes)
+- **Screenshot automation** — full page, element-level, or high-DPI (2x) capture
+
+#### Progressive Disclosure
+
+```
+SKILL.md (decide which path → skeleton steps)
+  ├── references/render-to-image.md    (setContent + CDN rendering patterns)
+  ├── references/export-strategies.md  (screenshot / Canvas / download)
+  ├── references/iframe-and-canvas.md  (cross-origin iframe, contentFrame)
+  ├── references/wait-strategies.md    (condition-based waiting, avoid sleep)
+  ├── references/troubleshooting.md    (common errors + fixes)
+  ├── templates/skeleton.mjs           (starter script with both paths)
+  └── examples/
+      ├── diagramgpt.mjs              (full: iframe + follow-up forms + Canvas)
+      └── mermaid-render.mjs           (full: CDN Mermaid → batch PNG)
+```
+
+#### Design Principles
+
+- **Two paths, one skeleton** — recording is optional, not mandatory
+- **Headless by default** — `headless: true` for batch/render tasks, `false` for debugging
+- **Reference on demand** — main doc stays under 120 lines; details loaded when needed
+- **Real examples** — both examples are production-tested, not toy code
+
+---
+
 ## All Skills
 
 | Skill | One-liner | Install |
 |-------|-----------|---------|
 | **[project-onboarding](skills/project-onboarding/)** | Scan codebase, generate docs, capture domain knowledge | `npx skills add Wubabalala/claude-skills@project-onboarding` |
+| **[playwright-web-automation](skills/playwright-web-automation/)** | Browser automation + diagram rendering with Playwright | `npx skills add Wubabalala/claude-skills@playwright-web-automation` |
 
 More skills coming. Each one is built from real production workflows.
 
