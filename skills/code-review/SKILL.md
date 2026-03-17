@@ -96,7 +96,7 @@ On review trigger:
    - Why was this implementation approach chosen?
    - Are there special contextual constraints?
 3. Assess risk level for each changed file:
-   - **HIGH**: Auth, encryption, external calls, payments/money, validation logic removal
+   - **HIGH**: Auth, encryption, external calls, payments/money, validation logic removal, @Transactional boundary changes
    - **MEDIUM**: Business logic, state changes, new public APIs
    - **LOW**: Comments, test files, UI styling, logging
 
@@ -110,6 +110,12 @@ On review trigger:
 - XSS (unescaped user input)
 - Unsafe eval/exec
 - Permission checks removed or relaxed
+
+**P0 Transaction Safety [must fix]** (check whenever code touches money/state across tables)
+- Catching `DataIntegrityViolationException` inside `@Transactional` — transaction is already marked rollback-only before the catch runs; the catch cannot save it
+- Two tables must be atomic but use different transaction propagation (one REQUIRES_NEW, one outer) — partial commit / orphan state risk
+- Optimistic lock retry loop inside a `@Transactional(REQUIRES_NEW)` method — transaction is poisoned after first failure, retries are useless
+- For every method involving money: are caller and callee in the same transaction? If they commit independently, what happens when one succeeds and the other rolls back?
 
 **P1 Logic Bugs [must fix]**
 - Errors that will cause crashes
