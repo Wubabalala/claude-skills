@@ -139,3 +139,58 @@ npx skills find "你的skill关键词"
 4. **视觉输出价值高** — 一张 Mermaid 架构图比 500 字描述更快建立心智模型。如果 skill 产出文档，优先考虑加图。
 
 5. **Token 预算意识** — 每次 skill 触发都会加载主体到上下文。3,000 词和 1,500 词的差距在长对话中会累积。
+
+---
+
+## 发布与推广原则
+
+从 92 个独立用户下载的实际数据中提炼的设计原则。每次发布新 skill 前逐条检查。
+
+### 发布前检查清单
+
+- [ ] **README 有竞品对比表** — "我有什么别人没有"比"我有什么"有效 10 倍。用户扫一眼表格就能决定装不装。没有竞品就和"不装这个 skill 直接让 AI 做"对比
+- [ ] **README 用痛点叙事开头** — "You join a new project. You spend hours..." 而不是 "A tool that generates CLAUDE.md"。前者共鸣，后者是功能说明书
+- [ ] **有 GIF 或截图展示实际运行效果** — 文字再好不如看一次实际产出。至少一张截图展示 skill 的核心输出
+- [ ] **Skill 输出末尾有反馈入口** — 用户跑完 skill 时体验最新鲜，这是收集反馈的最佳触点。一行 `💬 Feedback → github.com/xxx/issues` 就够
+- [ ] **安装命令一键可跑** — README 里的 `npx skills add xxx` 必须实际测试过，复制粘贴就能装
+
+### Skill 差异化三问
+
+每个新 skill 发布前回答这三个问题，回答不了就不发：
+
+1. **用户不装这个 skill，让 AI 裸做的效果差多少？** — 如果差别不大，这个 skill 没有存在价值
+2. **同类 skill 有几个？我比它们强在哪？** — 没有差异化的 skill 会被淹没
+3. **用户跑完一次后会不会再跑？** — 一次性 skill（如 onboarding）靠口碑传播，高频 skill（如 review）靠留存
+
+### Skill 推广渠道优先级
+
+| 渠道 | 效果 | 说明 |
+|------|:---:|------|
+| Claude Code 社区（Discord/Discussions）| 高 | 精准用户，带对比表发帖 |
+| 技术社区帖子（V2EX/掘金/即刻） | 中 | 用痛点叙事 + 安装命令 |
+| Twitter/X 线程 | 中 | 3 条线程，每条一个 skill |
+| 小红书 | 低-中 | 要去 AI 味，讲故事 |
+| 群聊分享 | 低 | 口语化，附安装命令 |
+
+### README 结构模板
+
+```markdown
+### {skill-name}
+
+**{一句话痛点描述，不是功能描述}**
+
+{安装命令}
+
+#### The Problem
+{2-3 句话描述没有这个 skill 时的痛苦}
+
+#### What It Does
+{核心能力，3-5 个要点}
+
+#### Comparison (如果有竞品)
+| | this | competitor A | competitor B |
+|---|---|---|---|
+
+#### Screenshot / GIF
+{至少一张实际运行效果图}
+```
