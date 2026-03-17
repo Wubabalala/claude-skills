@@ -122,14 +122,22 @@ On review trigger:
 - Logic that will produce incorrect data
 - Resource leaks (unclosed connections, uncleared state)
 - Race conditions
+- Return value disconnected from computed result (e.g., builds a list then returns empty/different object)
+- Request attribute name mismatch between interceptor and controller (e.g., interceptor sets "adminId" but controller reads "userId")
+
+**P1 API Input Validation [must fix]**
+- Request body fields accessed without null check — `body.get("x").toString()` NPEs when key is absent
+- Numeric fields parsed without try-catch — `new BigDecimal(input)` throws NumberFormatException on invalid input
+- Missing business validation before passing to service layer (empty strings, negative amounts, zero values)
 
 **P2 Robustness [should fix]**
 - Missing necessary try-catch
 - Empty catch blocks
 - Unhandled edge cases (null, empty arrays)
-- N+1 queries
+- N+1 queries (especially: loading all rows then paginating in memory instead of DB-level pagination)
 - Repeated computation/requests inside loops
 - Obvious memory leaks
+- ORM/JPA pitfalls: `@Version` field missing `@Builder.Default` when using Lombok `@Builder`; entity returned directly as JSON with lazy-loaded fields; `findAll()` on unbounded tables for aggregation instead of `@Query` with SUM/COUNT
 
 **P3 Maintainability [optional fix]**
 - Functions longer than 100 lines
