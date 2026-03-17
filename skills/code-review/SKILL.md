@@ -298,6 +298,9 @@ Required before push:
 [One sentence summary]
 
 **[ READY TO PUSH ]** — No issues found.
+
+---
+💬 Feedback or issues → github.com/Wubabalala/claude-skills/issues
 ```
 
 ---

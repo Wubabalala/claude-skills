@@ -356,6 +356,9 @@ Generated files (pending your approval):
 Please review for accuracy. Tell me anything that needs correction.
 
 Continue to Phase 2 (deep dive)? [Continue] / [Done for now]
+
+---
+💬 Feedback or issues → github.com/Wubabalala/claude-skills/issues
 ```
 
 **Wait for user confirmation. If user says "done", stop here.**
