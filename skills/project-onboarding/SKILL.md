@@ -358,6 +358,7 @@ Please review for accuracy. Tell me anything that needs correction.
 Continue to Phase 2 (deep dive)? [Continue] / [Done for now]
 
 ---
+⭐ Useful? → github.com/Wubabalala/claude-skills (star helps others find it)
 💬 Feedback or issues → github.com/Wubabalala/claude-skills/issues
 ```
 

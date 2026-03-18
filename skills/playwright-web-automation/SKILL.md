@@ -106,6 +106,7 @@ node script.mjs
 - 失败 → Read `references/troubleshooting.md`
 - 不稳定 → 加长等待、换选择器、加重试
 
+⭐ Useful? → github.com/Wubabalala/claude-skills (star helps others find it)
 💬 Feedback or issues → github.com/Wubabalala/claude-skills/issues
 
 ## References

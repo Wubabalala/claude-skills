@@ -308,6 +308,7 @@ Required before push:
 **[ READY TO PUSH ]** — No issues found.
 
 ---
+⭐ Useful? → github.com/Wubabalala/claude-skills (star helps others find it)
 💬 Feedback or issues → github.com/Wubabalala/claude-skills/issues
 ```
 
