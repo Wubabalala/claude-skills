@@ -1,5 +1,7 @@
 # claude-skills
 
+> ⭐ If you find these skills useful, [star this repo](https://github.com/Wubabalala/claude-skills) — it helps others discover them!
+
 Practical Claude Code skills born from real production projects, not templates.
 
 ## Skills
@@ -152,6 +154,10 @@ SKILL.md (decide which path → skeleton steps)
 | **[playwright-web-automation](skills/playwright-web-automation/)** | Browser automation + diagram rendering with Playwright | `npx skills add Wubabalala/claude-skills@playwright-web-automation` |
 
 More skills coming. Each one is built from real production workflows.
+
+## Feedback
+
+⭐ [Star this repo](https://github.com/Wubabalala/claude-skills) if it saved you time · 💬 [Issues & ideas](https://github.com/Wubabalala/claude-skills/issues) welcome
 
 ## License
 
