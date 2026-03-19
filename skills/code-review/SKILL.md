@@ -185,6 +185,14 @@ Before reporting, confirm:
 - Does the fix benefit outweigh the cost?
 - Does the project's global error handler already cover this scenario?
 
+**Mandatory verification for interface/protocol/API findings** (skip any of these → finding is unverified → do NOT include in report):
+
+| Check | How | Anti-pattern |
+|-------|-----|-------------|
+| Producer-consumer dual verification | Before claiming "field may be missing", read the producer-side code to confirm whether it guarantees the field | Only looked at frontend `x \|\| []` and filed P1, never checked if server always returns x |
+| Dependency chain evidence | Before claiming "missing X causes Y to break", grep to confirm Y actually reads X | Claimed "missing roundTurnOrder causes problems" but the consuming function never uses that field |
+| Complete pattern coverage | After finding one instance of a pattern issue, search for ALL similar occurrences — report all or none | Only reported availableActions risk in split_action, missed that action_execute has the same dependency |
+
 ### Step 5: Auto-Fix Suggestions
 
 For **deterministic issues** (single correct fix, no design decisions involved), provide directly applicable fixes at the end of the report:
