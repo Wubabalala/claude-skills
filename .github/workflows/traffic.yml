@@ -1,0 +1,85 @@
+name: Collect Traffic Data
+
+on:
+  schedule:
+    # 每周一 UTC 6:00 采集（14天窗口覆盖上周全部数据）
+    - cron: '0 6 * * 1'
+  workflow_dispatch: # 支持手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect traffic data
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        run: |
+          set -e
+          mkdir -p traffic
+
+          DATE=$(date -u +%Y-%m-%d)
+          FILE=traffic/data.json
+
+          # 拉取 clones 和 views
+          CLONES=$(gh api repos/${{ github.repository }}/traffic/clones)
+          VIEWS=$(gh api repos/${{ github.repository }}/traffic/views)
+
+          # 构建今日快照
+          NEW_ENTRY=$(jq -n \
+            --arg date "$DATE" \
+            --argjson clones "$CLONES" \
+            --argjson views "$VIEWS" \
+            '{
+              date: $date,
+              clones: { count: $clones.count, uniques: $clones.uniques, daily: [ $clones.clones[] | { date: .timestamp[:10], count, uniques } ] },
+              views:  { count: $views.count,  uniques: $views.uniques,  daily: [ $views.views[]  | { date: .timestamp[:10], count, uniques } ] }
+            }')
+
+          # 初始化或读取已有数据
+          if [ ! -f "$FILE" ]; then
+            echo '{"clones":{},"views":{}}' > "$FILE"
+          fi
+
+          # 合并每日数据（新数据覆盖旧数据，保留历史）
+          MERGED=$(jq -n \
+            --argjson existing "$(cat $FILE)" \
+            --argjson entry "$NEW_ENTRY" \
+            '
+            # 合并 daily 数组到已有 map 中
+            def merge_daily(existing; daily):
+              reduce daily[] as $d (existing; .[$d.date] = { count: $d.count, uniques: $d.uniques });
+
+            {
+              clones: merge_daily($existing.clones; $entry.clones.daily),
+              views:  merge_daily($existing.views;  $entry.views.daily)
+            }')
+
+          echo "$MERGED" | jq '.' > "$FILE"
+
+          # 生成可读的 summary
+          TOTAL_CLONES=$(echo "$MERGED" | jq '[.clones[]] | map(.count) | add // 0')
+          UNIQUE_CLONES=$(echo "$MERGED" | jq '[.clones[]] | map(.uniques) | max // 0')
+          TOTAL_VIEWS=$(echo "$MERGED" | jq '[.views[]] | map(.count) | add // 0')
+
+          echo "## Traffic Summary (updated $DATE)" > traffic/README.md
+          echo "" >> traffic/README.md
+          echo "| Metric | Total |" >> traffic/README.md
+          echo "|--------|-------|" >> traffic/README.md
+          echo "| Clones | $TOTAL_CLONES |" >> traffic/README.md
+          echo "| Views  | $TOTAL_VIEWS |" >> traffic/README.md
+          echo "" >> traffic/README.md
+          echo "Raw data: [data.json](data.json)" >> traffic/README.md
+
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add traffic/
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore: update traffic data $(date -u +%Y-%m-%d)"
+          git push
