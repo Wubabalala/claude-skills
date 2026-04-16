@@ -1,0 +1,7 @@
+{"message":{"role":"user","content":[{"type":"text","text":"fix the bug"}]}}
+{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"D:\\work\\project\\src\\main.py"}}]}}
+{"message":{"role":"tool","content":[{"type":"tool_result","tool_use_id":"t1","content":"file content here"}]}}
+{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"D:\\work\\project\\api-module\\src\\handler.java","old_string":"old","new_string":"new"}}]}}
+{"message":{"role":"tool","content":[{"type":"tool_result","tool_use_id":"t2","content":"edited"}]}}
+{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Write","input":{"file_path":"D:\\work\\project\\api-module\\src\\new_file.py","content":"print('hello')"}}]}}
+{"message":{"role":"assistant","content":[{"type":"text","text":"Done fixing the bug."}]}}

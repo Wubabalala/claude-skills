@@ -1,0 +1,11 @@
+{
+  "session_id": "test-session-001",
+  "cwd": "D:\\work\\IDEA\\ideaProject\\v-story",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "C:\\Users\\hyc\\.claude\\projects\\D--work-IDEA-ideaProject-v-story\\memory\\new-feature.md",
+    "old_string": "old",
+    "new_string": "new"
+  }
+}
