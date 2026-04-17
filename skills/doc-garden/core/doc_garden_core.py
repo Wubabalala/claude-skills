@@ -427,21 +427,52 @@ _PATH_IN_BACKTICKS = re.compile(
 )
 _PATH_IN_LINKS = re.compile(r"\[([^\]]*)\]\(([^)#]+)\)")
 
-# Patterns that look like paths but aren't local repo files
+# Patterns that look like paths but aren't local repo files.
+# Each rule documents a real doc authoring pattern that would otherwise
+# false-positive as a local file reference.
 _NOT_A_LOCAL_PATH = re.compile(r"""
-    ^/(?:opt|etc|usr|var|apps?|home|tmp|mnt|proc|sys|dev)/ |  # server absolute paths
-    ^/\w+/server_modules/ |                                   # deployment paths
-    ^/\w+/web_modules/ |                                      # deployment paths
-    ^/\w+/docker_modules/ |                                   # docker paths
-    ^\.\.\./  |                                               # placeholder patterns
-    ^[A-Z]:/  |                                               # Windows absolute paths (C:/)
-    /\*\*/  |                                                 # glob patterns
-    ^devlop/ |                                                # git branch names
-    ^origin/ |                                                # git remote refs
-    ^main$ | ^master$ |                                       # branch names
-    ^starter-kit |                                            # template/boilerplate refs
-    ^Asia/ | ^America/ | ^Europe/ |                           # timezone strings
-    ^\w+@\w+                                                  # user@host patterns
+    # Unix server absolute paths — appear in deployment/ops docs describing
+    # server filesystems, not files tracked in this repo.
+    # Examples: `/opt/app/bootstrap.yml`, `/var/log/nginx.log`, `/etc/hosts`.
+    ^/(?:opt|etc|usr|var|apps?|home|tmp|mnt|proc|sys|dev)/ |
+
+    # Legacy JBoss/WebSphere/containerized deployment layouts referenced
+    # in runbooks. Shape: `/<appname>/{server,web,docker}_modules/...`.
+    ^/\w+/server_modules/ |
+    ^/\w+/web_modules/ |
+    ^/\w+/docker_modules/ |
+
+    # Markdown / prose placeholder ellipsis for truncated paths.
+    # Example: `.../config/app.yml` in a narrative like "see .../app.yml".
+    ^\.\.\./ |
+
+    # Windows absolute paths. Authors use these when referencing local tools
+    # or external machines, not repo-relative files.
+    # Example: `C:/Users/hyc/.claude/plans/foo.md`.
+    ^[A-Z]:/ |
+
+    # Glob / wildcard patterns — intent is "files matching this shape",
+    # not a specific file. Example: `src/**/*.py`, `tests/**/test_*.py`.
+    /\*\*/ |
+
+    # Git branch names that look path-like due to slashes. `devlop/` matches
+    # the misspelled-but-real convention used in some projects; `origin/` is
+    # a remote ref; bare `main`/`master` are default branch names.
+    ^devlop/ |
+    ^origin/ |
+    ^main$ | ^master$ |
+
+    # Boilerplate / template project references (not a file in this repo).
+    # Example: "forked from `starter-kit-java`".
+    ^starter-kit |
+
+    # IANA timezone identifiers. Shape `Continent/City` collides with 2-segment
+    # paths. Example: `Asia/Shanghai`, `America/New_York`, `Europe/London`.
+    ^Asia/ | ^America/ | ^Europe/ |
+
+    # SSH / scp target notation `user@host[:path]`. Appears in deployment
+    # command examples. Example: `deploy@prod-01`.
+    ^\w+@\w+
 """, re.VERBOSE)
 
 

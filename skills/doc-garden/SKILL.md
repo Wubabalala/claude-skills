@@ -227,6 +227,22 @@ See `references/config-spec.md` for full skeleton definitions per project type. 
 | Section ordering | | Yes | |
 | docs/ structure | | | Yes |
 
+### Authoring Tips: Avoiding Path Rot False Positives
+
+Path Rot assumes paths in backticks or markdown links point to **local repository files**. When you need to reference something that isn't — an external repo, a cross-repo filename, a conceptual path — use one of these forms so the check skips it cleanly.
+
+| You want to reference | Anti-pattern (triggers PATH_ROT) | Clean form | Why it works |
+|---|---|---|---|
+| External GitHub repo | `` `duanyytop/agents-radar` `` | Already handled — 2-segment slash paths with no extension in the final segment are skipped as org/repo refs | regex excludes |
+| File inside an external repo | `` `highlights.json` `` | `` `agents-radar:highlights.json` `` or markdown link `[highlights.json](https://github.com/.../highlights.json)` | `:` is not in the path character class; `http(s)://` is filtered upstream |
+| File in shell docs / example output | `` `/var/log/app.log` `` | Already handled — `/var/`, `/opt/`, `/etc/` etc. are recognized as server absolute paths | regex excludes |
+| Glob or pattern, not a real file | `` `src/**/*.py` `` | Already handled — `/**/` is filtered | regex excludes |
+| Git branch / remote | `` `origin/main` `` | Already handled — `origin/`, `devlop/`, `main`, `master` are filtered | regex excludes |
+
+**Rule of thumb**: if the token **is** a real file living in this repo, leave it. Otherwise, wrap it in a URL or add a scheme-like prefix (`repo:file` / `upstream:file` / `external:file`). The checker keeps working as a strict file-existence guard and you keep authoring flexibility.
+
+Extending the filter: if a whole class of paths legitimately appears in your docs but shouldn't be checked (e.g. a deployment path prefix specific to your infra), add it to `ignore_paths` in `.claude/doc-garden.json` — that's the per-project escape hatch.
+
 ---
 
 ## Memory Directory Resolution
