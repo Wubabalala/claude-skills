@@ -130,8 +130,9 @@ Run applicable checks from `references/drift-taxonomy.md`:
    - For each sunken file: read frontmatter `type` field, guess target section
 
 2. **Path Rot** — file paths in CLAUDE.md that don't exist on disk
-   - Extract paths from backtick blocks and markdown links
-   - Check existence relative to doc location and project root
+   - Extract paths from backtick blocks and markdown links (skip URLs and fenced code blocks)
+   - Resolve candidate locations in order: doc location → project root → module root (for module docs) → `resolve_memory_dir(cwd)` (when path starts with `memory/`) → `~/.claude/plans/` (when path starts with `plans/`) → glob walk within module root (for nested module paths)
+   - A finding fires only if **none** of the candidates exist
    - Skip paths matching `ignore_paths` from config
 
 **Microservice/monorepo only** (when `layer2` + `environment_domains` defined):
@@ -242,6 +243,56 @@ Path Rot assumes paths in backticks or markdown links point to **local repositor
 **Rule of thumb**: if the token **is** a real file living in this repo, leave it. Otherwise, wrap it in a URL or add a scheme-like prefix (`repo:file` / `upstream:file` / `external:file`). The checker keeps working as a strict file-existence guard and you keep authoring flexibility.
 
 Extending the filter: if a whole class of paths legitimately appears in your docs but shouldn't be checked (e.g. a deployment path prefix specific to your infra), add it to `ignore_paths` in `.claude/doc-garden.json` — that's the per-project escape hatch.
+
+---
+
+## Semantic Audit (human-in-the-loop)
+
+Triggered by: `/doc-audit-semantic`, or when user says "semantic drift", "语义漂移", "语义审计".
+
+Complements the mechanical checks above. Mechanical checks catch broken paths and missing indices — cheap, deterministic, should run first. Semantic audit catches **doc claims that contradict actual code behaviour** — things only a human or LLM reader can judge.
+
+### Motivating examples (real findings from dogfooding this skill)
+
+- SKILL.md promised `save_config` strips `_discovery` metadata before writing; the function actually `json.dump`ed the full dict. No path was broken, so `path_rot_check` saw nothing.
+- SKILL.md described Path Rot as checking "doc location and project root" (2 candidates); the implementation actually walks 5+ candidates including `memory/` runtime prefix. Behaviour vs description drift.
+
+Neither is catchable by regex-based detection.
+
+### When to use
+
+- Before a milestone commit or release (spot-check docs still describe reality)
+- After a refactor touched code that docs talk about
+- Periodic (e.g. monthly) sanity pass on long-lived CLAUDE.md / memory
+- Not every run — semantic audit is expensive; keep it deliberate
+
+### Workflow (Claude executes, user reviews)
+
+1. **Select scope** — ask user which docs to audit. Default: root CLAUDE.md + memory/*.md + `docs/*` relevant to recent changes. Bound at ~20 assertions per run (a human-reviewable budget).
+2. **Extract assertions** — read each doc, list verifiable claims. Each claim is:
+   ```
+   { source: "<file>:<line>", claim: "<verbatim quote>", verify_path: "grep symbol | read function | check file" }
+   ```
+   Skip aspirational / subjective claims; only keep ones where code can refute.
+3. **Verify each claim** — read the referenced code location. Compare quote against code reality.
+4. **Classify** into three buckets:
+   - **ALIGNED**: doc claim matches code behaviour
+   - **DRIFTED**: concrete divergence — cite both sides verbatim with line numbers
+   - **UNVERIFIABLE / AMBIGUOUS**: requires human judgement (design intent, external behaviour, runtime-only)
+5. **Report** — show user only DRIFTED and UNVERIFIABLE (ALIGNED is noise). For each DRIFTED, propose a fix direction (update doc / fix code / change design) — do NOT auto-apply.
+
+### Rules
+
+- **Never edit doc or code based on semantic audit alone** — always present findings to user first. Semantic drift often has multiple valid resolutions.
+- **Quote both sides verbatim** — doc claim vs code snippet. Paraphrase hides drift.
+- **Budget ~20 assertions per run**. Scaling beyond is noise; prefer targeted re-runs over exhaustive scans.
+- **Honesty about limits**: if a claim can't be verified without running code, touching network, or external context, mark UNVERIFIABLE — don't guess.
+
+### What this does NOT do
+
+- Does not replace mechanical checks (cheap; run them first)
+- Does not auto-fix anything (drift resolution is a human call)
+- Does not cross-check doc-vs-doc consistency (e.g. SKILL.md vs README.md disagreeing) — separate workflow
 
 ---
 

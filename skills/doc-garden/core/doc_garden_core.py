@@ -60,12 +60,21 @@ def load_config(cwd: str) -> dict:
 
 
 def save_config(cwd: str, config: dict):
-    """Save config to .claude/doc-garden.json."""
+    """Save config to .claude/doc-garden.json.
+
+    Top-level keys starting with `_` (e.g. `_discovery`) are agent-facing
+    metadata and are stripped before persistence. The caller's dict is not
+    mutated. Note: nested `_`-prefix keys (e.g. `_unorganized` inside
+    `environment_domains`) are NOT stripped — if they reach save time it
+    means the interactive env-domain grouping step was skipped, and the
+    dirty data is preserved to surface the oversight.
+    """
+    persisted = {k: v for k, v in config.items() if not k.startswith("_")}
     config_dir = os.path.join(cwd, ".claude")
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "doc-garden.json")
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+        json.dump(persisted, f, ensure_ascii=False, indent=2)
 
 
 def has_config(cwd: str) -> bool:

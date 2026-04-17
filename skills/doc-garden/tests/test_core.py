@@ -20,6 +20,7 @@ from core.doc_garden_core import (
     structure_drift_check,
     generate_draft_config,
     has_config,
+    save_config,
     apply_auto_fix,
     validate_config,
     extract_modified_files_from_transcript,
@@ -281,6 +282,32 @@ class TestConfig:
         (tmp_path / ".claude").mkdir()
         (tmp_path / ".claude" / "doc-garden.json").write_text("{}", encoding="utf-8")
         assert has_config(str(tmp_path)) is True
+
+    def test_save_config_strips_underscore_prefix_keys(self, tmp_path):
+        """save_config must not persist _-prefixed agent-facing metadata.
+        Guards SKILL.md's promise that `_discovery` is removed before save."""
+        config = {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "staleness_threshold_days": 14,
+            "_discovery": {"detected_type": "standalone", "claude_md_count": 1},
+        }
+        save_config(str(tmp_path), config)
+        loaded = load_config(str(tmp_path))
+        assert "_discovery" not in loaded
+        assert loaded["project_type"] == "standalone"
+        assert loaded["doc_hierarchy"] == {"layer1": "CLAUDE.md"}
+        assert loaded["staleness_threshold_days"] == 14
+
+    def test_save_config_does_not_mutate_caller_dict(self, tmp_path):
+        """save_config must not mutate the caller's config dict when stripping keys."""
+        config = {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "_discovery": {"x": 1},
+        }
+        save_config(str(tmp_path), config)
+        assert "_discovery" in config  # original dict untouched
 
 
 # ---------------------------------------------------------------------------
