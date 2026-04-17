@@ -71,9 +71,8 @@ All detection logic in one place. Skill is a thin consumer.
 
 ## Roadmap
 
-- **Phase 1-3** (complete): Audit + normalize + hooks
-- **Phase 4** (next): Cross-layer contradiction, config value drift, staleness detection
-- **Phase 5**: Polish + publish to marketplace
+- **Phase 1-4** (complete): Audit + normalize + hooks + cross-layer/config-drift/staleness detection
+- **Phase 5** (next): Polish + publish to marketplace
 
 ## Related skills
 

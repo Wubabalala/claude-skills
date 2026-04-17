@@ -445,6 +445,9 @@ _NOT_A_LOCAL_PATH = re.compile(r"""
 """, re.VERBOSE)
 
 
+_GITHUB_ORG_REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
+
+
 def _is_local_repo_path(path_str: str) -> bool:
     """Filter out paths that are clearly not local repository file references."""
     if _NOT_A_LOCAL_PATH.search(path_str):
@@ -455,6 +458,10 @@ def _is_local_repo_path(path_str: str) -> bool:
     has_extension = '.' in path_str.split('/')[-1]
     has_slash = '/' in path_str
     if not has_extension and not has_slash:
+        return False
+    # GitHub org/repo pattern: single slash, no extension in last segment.
+    # e.g. "duanyytop/agents-radar" — but NOT "src/main.py" (last segment has extension)
+    if has_slash and not has_extension and _GITHUB_ORG_REPO.match(path_str):
         return False
     return True
 
@@ -535,6 +542,17 @@ def path_rot_check(cwd: str, config: dict) -> list:
             # For module docs: also try relative to module root
             if doc_dir != cwd:
                 candidates.append(os.path.join(module_root, path_str))
+
+            # Claude Code runtime-resolved prefixes: memory/ lives in user-level
+            # project memory dir, plans/ lives in ~/.claude/plans/
+            if path_str.startswith("memory/"):
+                candidates.append(
+                    os.path.join(resolve_memory_dir(cwd), path_str[len("memory/"):])
+                )
+            if path_str.startswith("plans/"):
+                candidates.append(
+                    os.path.expanduser(f"~/.claude/plans/{path_str[len('plans/'):]}")
+                )
 
             # For nested module paths (e.g., dw-modules-vstory/src/...):
             # try glob search within module root

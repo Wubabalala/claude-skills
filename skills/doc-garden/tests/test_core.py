@@ -172,6 +172,89 @@ class TestPathRotCheck:
         rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
         assert not any("docs/" in f.detail for f in rot)
 
+    def test_path_rot_resolves_memory_prefix_to_runtime_dir(self, tmp_path, monkeypatch):
+        """memory/ prefix should resolve to user-level memory dir, not project root."""
+        fake_mem = tmp_path / "runtime_memory"
+        fake_mem.mkdir()
+        (fake_mem / "reference_foo.md").write_text(
+            "---\ntype: reference\n---\n", encoding="utf-8"
+        )
+
+        monkeypatch.setattr(
+            "core.doc_garden_core.resolve_memory_dir", lambda cwd: str(fake_mem)
+        )
+        (tmp_path / "CLAUDE.md").write_text(
+            "See `memory/reference_foo.md` for details.\n", encoding="utf-8"
+        )
+
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("reference_foo.md" in d for d in rot_paths), rot_paths
+
+    def test_path_rot_flags_missing_memory_file(self, tmp_path, monkeypatch):
+        """If file missing in runtime memory dir too, still PATH_ROT."""
+        fake_mem = tmp_path / "runtime_memory"
+        fake_mem.mkdir()
+        monkeypatch.setattr(
+            "core.doc_garden_core.resolve_memory_dir", lambda cwd: str(fake_mem)
+        )
+        (tmp_path / "CLAUDE.md").write_text(
+            "See `memory/missing.md`.\n", encoding="utf-8"
+        )
+
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        assert any(
+            "missing.md" in f.detail
+            for f in findings
+            if f.drift_type == DriftType.PATH_ROT
+        )
+
+    def test_path_rot_resolves_plans_prefix_to_claude_plans_dir(self, tmp_path, monkeypatch):
+        """plans/ prefix should resolve to ~/.claude/plans/."""
+        fake_home = tmp_path / "fake_home"
+        fake_plans = fake_home / ".claude" / "plans"
+        fake_plans.mkdir(parents=True)
+        (fake_plans / "my_plan.md").write_text("plan", encoding="utf-8")
+
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows
+
+        (tmp_path / "CLAUDE.md").write_text(
+            "See `plans/my_plan.md`.\n", encoding="utf-8"
+        )
+
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("my_plan.md" in d for d in rot_paths), rot_paths
+
+    def test_path_rot_skips_github_org_repo_refs(self, tmp_path):
+        """External GitHub repo refs like `duanyytop/agents-radar` should not be flagged."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Upstream: `duanyytop/agents-radar` provides digests.\n"
+            "Also `some-org/my-tool` here.\n",
+            encoding="utf-8",
+        )
+
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("agents-radar" in d for d in rot_paths), rot_paths
+        assert not any("my-tool" in d for d in rot_paths), rot_paths
+
+    def test_path_rot_still_catches_real_two_segment_paths(self, tmp_path):
+        """Regression guard: 2-segment paths WITH extension must still be checked."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Entry: `src/main.py`\nConfig: `config/app.yml`\n", encoding="utf-8"
+        )
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert any("main.py" in d for d in rot_paths), rot_paths
+        assert any("app.yml" in d for d in rot_paths), rot_paths
+
 
 # ---------------------------------------------------------------------------
 # Config
