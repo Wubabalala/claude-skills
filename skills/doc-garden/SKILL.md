@@ -212,7 +212,7 @@ Output format:
 
 **Levels**: `auto` (no confirmation), `semi-auto` (confirm each), `suggest` (user decides)
 
-**Idempotency**: All checks verify current state before acting. Running twice produces no additional changes. Actions logged to `.claude/doc-garden-last-normalize.json`.
+**Idempotency**: All checks verify current state before acting. Running twice produces no additional changes.
 
 ### Target Skeletons
 

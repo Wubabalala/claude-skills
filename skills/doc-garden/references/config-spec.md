@@ -86,4 +86,3 @@ Running normalize twice must produce no additional changes:
 - Skeleton: check section existence before suggesting
 - Frontmatter: check for `---` first line before suggesting
 - Index: check filename in MEMORY.md before suggesting
-- All writes logged to `.claude/doc-garden-last-normalize.json`

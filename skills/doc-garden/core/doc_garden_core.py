@@ -685,7 +685,11 @@ def staleness_check(cwd: str, config: dict) -> list:
         if doc_time == 0:
             continue  # not tracked by git
 
-        # Get most recent commit in the code directory (excluding the CLAUDE.md itself)
+        # Most recent commit in code_dir. CLAUDE.md is included in `.` on
+        # purpose: if CLAUDE.md is the newest file, `code_time == doc_time`
+        # and `gap = 0` (no report, correct). If code is actually newer,
+        # max() collapses to the real code commit and gap reflects real drift.
+        # Excluding CLAUDE.md would be defensive but behaviourally equivalent.
         try:
             result = subprocess.run(
                 ["git", "log", "-1", "--format=%at", "--", "."],
