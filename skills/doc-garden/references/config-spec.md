@@ -136,6 +136,25 @@ Default: `[]`.
 **Order matters**: first existing file wins. Typical order is most-common
 first (e.g. frontend before backend for a frontend-heavy project).
 
+**Scoped entries** (for microservice multi-module repos): an entry can
+also be a dict `{"scope": "<doc-prefix>/", "prefix": "<path-prefix>/"}`.
+The fallback applies only when the referring doc's path (relative to
+`cwd`) starts with `scope`. Prevents a module's local fallback from
+over-matching across unrelated modules. Example:
+
+```json
+"generic_path_fallbacks": [
+  "frontend/src/",                                                  // global string
+  {"scope": "auto-submit-web/", "prefix": "auto-submit-web/src/app/"},
+  {"scope": "auto-submit-mgmt/", "prefix": "auto-submit-mgmt/"}
+]
+```
+
+A doc at `auto-submit-web/docs/REFERENCE.md` referencing `foo/page.tsx`
+will try (in order): doc-location → project-root → global
+`frontend/src/` → scoped `auto-submit-web/src/app/` → report missing.
+Docs outside `auto-submit-web/` ignore that scoped entry entirely.
+
 ### `skip_bare_filenames`
 
 Boolean flag (default `false`). When `true`, paths that contain no `/`

@@ -68,9 +68,15 @@ DEFAULT_CONFIG = {
     # when `resolve_reference`'s generic (doc location / project root) candidates
     # all fail. Useful for monorepos where docs reference code with short
     # relative paths like "components/Foo.vue" but the actual file lives at
-    # "frontend/src/components/Foo.vue". Each entry is a repo-relative directory;
-    # the tool prepends each in order and checks existence.
-    # Example: ["frontend/src/", "backend/src/main/java/com/example/"].
+    # "frontend/src/components/Foo.vue".
+    #
+    # Two forms:
+    #   - String: global fallback, always applied
+    #     e.g. "frontend/src/"
+    #   - Dict with `scope` + `prefix`: applied only when the referring doc
+    #     lives under the scope — avoids cross-module pollution in
+    #     microservice multi-module repos
+    #     e.g. {"scope": "auto-submit-web/", "prefix": "auto-submit-web/src/app/"}
     "generic_path_fallbacks": [],
     # When True, bare filenames (paths without any `/`, e.g. `aiModes.js`,
     # `PaymentService.java`) are skipped during PATH_ROT. Docs often mention
@@ -959,15 +965,39 @@ def resolve_reference(path_str: str, doc_abs: str, cwd: str, config: dict) -> Re
     # Last-resort: user-configured project-convention fallback prefixes.
     # Monorepo / single-repo layouts often reference code with short relative
     # paths (e.g. "components/Foo.vue") even though the real file sits under
-    # a known prefix ("frontend/src/components/Foo.vue"). Projects declare
-    # those prefixes via `generic_path_fallbacks` so each is prepended in
-    # order and checked for existence.
-    for prefix in (config.get("generic_path_fallbacks") or []):
-        if not isinstance(prefix, str) or not prefix:
-            continue
-        # Normalize: ensure prefix ends with separator so join is clean
-        norm = prefix.rstrip("/").rstrip("\\")
-        candidates.append(os.path.join(cwd, norm, path_str))
+    # a known prefix ("frontend/src/components/Foo.vue").
+    #
+    # Two forms supported:
+    #   - String: global fallback, always applied
+    #     e.g. "frontend/src/"
+    #   - Dict: scoped fallback, only applied when the referring doc is
+    #     under the declared scope
+    #     e.g. {"scope": "auto-submit-web/", "prefix": "auto-submit-web/src/app/"}
+    #
+    # Scoped form is for microservice multi-module repos where each module
+    # has its own source root and global prefixes would over-match across
+    # modules.
+    doc_rel = ""
+    try:
+        doc_rel = os.path.relpath(doc_abs, cwd).replace("\\", "/")
+    except ValueError:
+        pass
+    for entry in (config.get("generic_path_fallbacks") or []):
+        if isinstance(entry, str):
+            if not entry:
+                continue
+            norm = entry.rstrip("/").rstrip("\\")
+            candidates.append(os.path.join(cwd, norm, path_str))
+        elif isinstance(entry, dict):
+            scope = entry.get("scope") or ""
+            prefix = entry.get("prefix") or ""
+            if not isinstance(scope, str) or not isinstance(prefix, str) or not prefix:
+                continue
+            scope_norm = scope.replace("\\", "/").lstrip("./")
+            if scope_norm and not doc_rel.startswith(scope_norm):
+                continue
+            prefix_norm = prefix.rstrip("/").rstrip("\\")
+            candidates.append(os.path.join(cwd, prefix_norm, path_str))
 
     if any(os.path.exists(c) for c in candidates):
         return ResolveResult(status="exists", candidates=candidates)
@@ -2301,6 +2331,26 @@ def validate_config(config: dict) -> list:
     sbf = config.get("skip_bare_filenames")
     if sbf is not None and not isinstance(sbf, bool):
         errors.append("skip_bare_filenames must be a boolean")
+
+    # generic_path_fallbacks: list of str or {scope, prefix} dicts
+    fallbacks = config.get("generic_path_fallbacks")
+    if fallbacks is not None:
+        if not isinstance(fallbacks, list):
+            errors.append("generic_path_fallbacks must be a list")
+        else:
+            for i, entry in enumerate(fallbacks):
+                if isinstance(entry, str):
+                    if not entry:
+                        errors.append(f"generic_path_fallbacks[{i}] empty string")
+                elif isinstance(entry, dict):
+                    scope = entry.get("scope")
+                    prefix = entry.get("prefix")
+                    if scope is not None and not isinstance(scope, str):
+                        errors.append(f"generic_path_fallbacks[{i}].scope must be a string")
+                    if not isinstance(prefix, str) or not prefix:
+                        errors.append(f"generic_path_fallbacks[{i}].prefix missing (non-empty string)")
+                else:
+                    errors.append(f"generic_path_fallbacks[{i}] must be string or dict")
 
     # entity_patterns: optional; each entry needs name + source_glob + entity_pattern + ref_scope
     entity_patterns = config.get("entity_patterns")

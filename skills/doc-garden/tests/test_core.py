@@ -412,6 +412,91 @@ class TestPathRotCheck:
         rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
         assert not rot, f"expected backend fallback to resolve, got: {rot}"
 
+    def test_generic_path_fallbacks_scoped_resolves_in_module(self, tmp_path):
+        """Scoped dict-form fallback applies when doc lives under scope prefix."""
+        # Module layout
+        (tmp_path / "module-a" / "src" / "app" / "foo").mkdir(parents=True)
+        (tmp_path / "module-a" / "src" / "app" / "foo" / "page.tsx").write_text(
+            "", encoding="utf-8"
+        )
+        # Doc inside the module
+        (tmp_path / "module-a" / "docs").mkdir()
+        (tmp_path / "module-a" / "docs" / "REFERENCE.md").write_text(
+            "See `foo/page.tsx`\n", encoding="utf-8"
+        )
+        # Root doc to satisfy layer1
+        (tmp_path / "CLAUDE.md").write_text("# root\n", encoding="utf-8")
+        config = {
+            "doc_hierarchy": {
+                "layer1": "CLAUDE.md",
+                "docs": ["module-a/docs/REFERENCE.md"],
+            },
+            "ignore_paths": [],
+            "generic_path_fallbacks": [
+                {"scope": "module-a/", "prefix": "module-a/src/app/"}
+            ],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not rot, f"expected scoped fallback to resolve, got: {rot}"
+
+    def test_generic_path_fallbacks_scoped_does_not_apply_outside_scope(self, tmp_path):
+        """Scoped fallback must NOT apply to docs outside its scope — prevents
+        cross-module pollution."""
+        # Module-a has source, module-b doesn't
+        (tmp_path / "module-a" / "src" / "app" / "foo").mkdir(parents=True)
+        (tmp_path / "module-a" / "src" / "app" / "foo" / "page.tsx").write_text(
+            "", encoding="utf-8"
+        )
+        # Doc in module-b references foo/page.tsx — should NOT resolve via
+        # module-a's scoped fallback.
+        (tmp_path / "module-b" / "docs").mkdir(parents=True)
+        (tmp_path / "module-b" / "docs" / "REFERENCE.md").write_text(
+            "Outside: `foo/page.tsx`\n", encoding="utf-8"
+        )
+        (tmp_path / "CLAUDE.md").write_text("# root\n", encoding="utf-8")
+        config = {
+            "doc_hierarchy": {
+                "layer1": "CLAUDE.md",
+                "docs": ["module-b/docs/REFERENCE.md"],
+            },
+            "ignore_paths": [],
+            "generic_path_fallbacks": [
+                {"scope": "module-a/", "prefix": "module-a/src/app/"}
+            ],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert any("page.tsx" in d for d in rot_paths), f"expected PATH_ROT (cross-module), got: {rot_paths}"
+
+    def test_generic_path_fallbacks_mixed_string_and_dict(self, tmp_path):
+        """Backward-compat: strings (global) and dicts (scoped) coexist."""
+        (tmp_path / "frontend" / "src").mkdir(parents=True)
+        (tmp_path / "frontend" / "src" / "Foo.vue").write_text("", encoding="utf-8")
+        (tmp_path / "module-a" / "src").mkdir(parents=True)
+        (tmp_path / "module-a" / "src" / "Bar.java").write_text("", encoding="utf-8")
+        (tmp_path / "module-a" / "docs").mkdir()
+        (tmp_path / "module-a" / "docs" / "R.md").write_text(
+            "`Bar.java`\n", encoding="utf-8"
+        )
+        (tmp_path / "CLAUDE.md").write_text(
+            "`Foo.vue`\n", encoding="utf-8"
+        )
+        config = {
+            "doc_hierarchy": {
+                "layer1": "CLAUDE.md",
+                "docs": ["module-a/docs/R.md"],
+            },
+            "ignore_paths": [],
+            "generic_path_fallbacks": [
+                "frontend/src/",                                     # global string
+                {"scope": "module-a/", "prefix": "module-a/src/"},   # scoped dict
+            ],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not rot, f"both string and dict forms should resolve, got: {rot}"
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -1226,6 +1311,21 @@ class TestValidateConfigNew:
                "skip_bare_filenames": "yes"}
         errors = validate_config(cfg)
         assert any("skip_bare_filenames" in e for e in errors)
+
+    def test_catches_bad_generic_path_fallbacks(self):
+        cases = [
+            {"generic_path_fallbacks": "not-a-list"},
+            {"generic_path_fallbacks": [123]},                  # not str or dict
+            {"generic_path_fallbacks": [""]},                   # empty string
+            {"generic_path_fallbacks": [{}]},                   # dict missing prefix
+            {"generic_path_fallbacks": [{"scope": 1, "prefix": "p/"}]},  # bad scope type
+            {"generic_path_fallbacks": [{"scope": "a/", "prefix": ""}]}, # empty prefix
+        ]
+        for extra in cases:
+            cfg = {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"}}
+            cfg.update(extra)
+            errors = validate_config(cfg)
+            assert any("generic_path_fallbacks" in e for e in errors), f"missed: {extra}"
 
     def test_layer1_missing_soft_when_doc_patterns_set(self, tmp_path):
         """run_audit downgrades 'Missing layer1' to WARNING if doc_patterns is set.
