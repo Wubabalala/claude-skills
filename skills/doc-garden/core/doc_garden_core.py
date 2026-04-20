@@ -29,6 +29,7 @@ class DriftType(str, Enum):
     CONTENT_DRIFT = "CONTENT_DRIFT"                 # cross-file semantic mismatch (custom checks)
     CUSTOM_CHECK_ERROR = "CUSTOM_CHECK_ERROR"       # custom hook raised or returned bad data
     CONFIG_SCHEMA_WARNING = "CONFIG_SCHEMA_WARNING" # .claude/doc-garden.json shape issue
+    FACT_VALUE_CONFLICT = "FACT_VALUE_CONFLICT"     # same fact key has different values across docs
 
 
 @dataclass
@@ -70,6 +71,17 @@ DEFAULT_CONFIG = {
     # the tool prepends each in order and checks existence.
     # Example: ["frontend/src/", "backend/src/main/java/com/example/"].
     "generic_path_fallbacks": [],
+    # Fact patterns for FACT_VALUE_CONFLICT: the same fact key appearing in
+    # multiple docs must agree on its value. Each entry:
+    #   name:         human-readable label, used in findings
+    #   regex:        Python regex applied per line; must capture key + value
+    #   key_group:    1-based regex group index identifying the fact key
+    #   value_group:  1-based regex group index identifying the fact value
+    # Conflict = same (name, key) mentioned in ≥2 docs with different values.
+    # A single doc mentioning a key multiple times is not a conflict; only
+    # cross-doc divergence triggers a finding. Typical use: file line counts
+    # summarized in multiple CLAUDE.md pointers, version pins, port numbers.
+    "fact_patterns": [],
 }
 
 
@@ -1093,6 +1105,111 @@ def staleness_check(cwd: str, config: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Fact value conflict
+# ---------------------------------------------------------------------------
+
+def fact_value_conflict_check(cwd: str, config: dict) -> list:
+    """Detect same fact key carrying different values across docs.
+
+    For each configured fact_pattern, regex-scan every doc in
+    collect_doc_files(). Extract (key, value) tuples per line. Group by
+    (pattern_name, key); report a finding when the same key surfaces in
+    ≥2 distinct docs with ≥2 distinct values.
+
+    Intra-doc repetition is ignored — only cross-doc divergence matters
+    (a single doc repeating the same figure twice isn't drift).
+
+    Findings emit one per conflicting key, naming all contributing
+    (doc, line, value) sites so the user can pick which is truth.
+    """
+    findings = []
+    fact_patterns = config.get("fact_patterns") or []
+    if not fact_patterns:
+        return findings
+
+    doc_rels = collect_doc_files(cwd, config)
+    if not doc_rels:
+        return findings
+    cwd_abs = os.path.abspath(cwd)
+
+    for fp in fact_patterns:
+        if not isinstance(fp, dict):
+            continue
+        name = fp.get("name")
+        regex_src = fp.get("regex")
+        key_group = fp.get("key_group")
+        value_group = fp.get("value_group")
+        if not (isinstance(name, str) and name
+                and isinstance(regex_src, str) and regex_src
+                and isinstance(key_group, int) and key_group >= 1
+                and isinstance(value_group, int) and value_group >= 1):
+            # Malformed pattern — validate_config already surfaces schema
+            # errors; silently skip here to keep the runtime path robust.
+            continue
+        try:
+            pattern = re.compile(regex_src)
+        except re.error:
+            continue
+
+        # key -> dict(value -> list of (doc_rel, line_no))
+        observations: dict = {}
+        for doc_rel in doc_rels:
+            doc_abs = os.path.join(cwd_abs, doc_rel)
+            if not os.path.isfile(doc_abs):
+                continue
+            try:
+                with open(doc_abs, encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+            for line_no, line in enumerate(lines, start=1):
+                for m in pattern.finditer(line):
+                    try:
+                        key = m.group(key_group)
+                        value = m.group(value_group)
+                    except (IndexError, re.error):
+                        continue
+                    if key is None or value is None:
+                        continue
+                    observations.setdefault(key, {}) \
+                                .setdefault(value, []) \
+                                .append((doc_rel, line_no))
+
+        for key, value_map in observations.items():
+            if len(value_map) < 2:
+                continue
+            # Require at least 2 distinct docs participating overall
+            participating_docs = {site[0] for sites in value_map.values() for site in sites}
+            if len(participating_docs) < 2:
+                continue
+
+            parts = []
+            first_doc = None
+            for value, sites in sorted(value_map.items()):
+                site_str = ", ".join(f"{d}:{ln}" for d, ln in sites)
+                parts.append(f"{value} ({site_str})")
+                if first_doc is None:
+                    first_doc = sites[0][0]
+            detail = (
+                f"[{name}] key '{key}' has {len(value_map)} conflicting values: "
+                + "; ".join(parts)
+            )
+            findings.append(Finding(
+                drift_type=DriftType.FACT_VALUE_CONFLICT,
+                severity=Severity.WARNING,
+                file=first_doc or "",
+                detail=detail,
+                fix_suggestion=(
+                    f"Pick the authoritative source for '{name}' and update the "
+                    "other docs to match (or reference the canonical source)."
+                ),
+                auto_fixable=False,
+            ))
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Cross-Layer Contradiction + Config Value Drift
 # ---------------------------------------------------------------------------
 
@@ -1409,6 +1526,10 @@ def run_audit(cwd: str, config: dict = None) -> list:
 
     # Staleness: always run
     findings += staleness_check(cwd, config)
+
+    # Fact value conflict: only if fact_patterns defined
+    if config.get("fact_patterns"):
+        findings += fact_value_conflict_check(cwd, config)
 
     # Custom project-specific checks: load .claude/doc-garden-checks.py if present.
     # Exceptions and malformed return values are surfaced as CUSTOM_CHECK_ERROR
@@ -1960,6 +2081,30 @@ def validate_config(config: dict) -> list:
                 if not isinstance(r.get("root"), str) or not r.get("root"):
                     errors.append(f"path_resolvers[{i}] missing 'root' (non-empty string)")
                 # optional defaults to False; no validation needed if absent
+
+    # fact_patterns: optional; each entry needs name + regex + key_group + value_group
+    fact_patterns = config.get("fact_patterns")
+    if fact_patterns is not None:
+        if not isinstance(fact_patterns, list):
+            errors.append("fact_patterns must be a list")
+        else:
+            for i, fp in enumerate(fact_patterns):
+                if not isinstance(fp, dict):
+                    errors.append(f"fact_patterns[{i}] must be a dict")
+                    continue
+                if not isinstance(fp.get("name"), str) or not fp.get("name"):
+                    errors.append(f"fact_patterns[{i}] missing 'name' (non-empty string)")
+                regex = fp.get("regex")
+                if not isinstance(regex, str) or not regex:
+                    errors.append(f"fact_patterns[{i}] missing 'regex' (non-empty string)")
+                else:
+                    try:
+                        re.compile(regex)
+                    except re.error as exc:
+                        errors.append(f"fact_patterns[{i}] regex invalid: {exc}")
+                for g in ("key_group", "value_group"):
+                    if not isinstance(fp.get(g), int) or fp.get(g) < 1:
+                        errors.append(f"fact_patterns[{i}] '{g}' must be a positive int (1-based regex group index)")
 
     return errors
 

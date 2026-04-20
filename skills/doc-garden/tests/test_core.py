@@ -18,6 +18,7 @@ from core.doc_garden_core import (
     cross_layer_check,
     config_value_drift_check,
     structure_drift_check,
+    fact_value_conflict_check,
     generate_draft_config,
     has_config,
     save_config,
@@ -1210,3 +1211,117 @@ class TestFormatReport:
         )]
         report = format_report(findings, project_name="my-project")
         assert "**Project**: my-project" in report
+
+
+# ---------------------------------------------------------------------------
+# fact_value_conflict_check
+# ---------------------------------------------------------------------------
+
+class TestFactValueConflict:
+    """FACT_VALUE_CONFLICT detects same fact-key values diverging across docs."""
+
+    def _write(self, path: Path, content: str):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def _cfg(self, extra=None):
+        cfg = {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "doc_patterns": ["CLAUDE.md", "REFERENCE.md"],
+            "fact_patterns": [
+                {
+                    "name": "file_line_count",
+                    "regex": r"([\w.-]+\.(?:java|vue|py))\s*\((\d{2,})\)",
+                    "key_group": 1,
+                    "value_group": 2,
+                }
+            ],
+        }
+        if extra:
+            cfg.update(extra)
+        return cfg
+
+    def test_reports_cross_doc_divergent_value(self, tmp_path):
+        """Same key, different values, in two docs → one finding."""
+        self._write(tmp_path / "CLAUDE.md", "PaymentService.java (1497)\n")
+        self._write(tmp_path / "REFERENCE.md", "PaymentService.java (1200)\n")
+
+        findings = fact_value_conflict_check(str(tmp_path), self._cfg())
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.drift_type == DriftType.FACT_VALUE_CONFLICT
+        assert f.severity == Severity.WARNING
+        assert "PaymentService.java" in f.detail
+        assert "1497" in f.detail and "1200" in f.detail
+        assert "file_line_count" in f.detail
+
+    def test_aligned_values_no_finding(self, tmp_path):
+        """Same key, same value across docs → no conflict."""
+        self._write(tmp_path / "CLAUDE.md", "Editor.vue (1032)\n")
+        self._write(tmp_path / "REFERENCE.md", "See Editor.vue (1032) for layout.\n")
+
+        findings = fact_value_conflict_check(str(tmp_path), self._cfg())
+        assert findings == []
+
+    def test_single_doc_repetition_ignored(self, tmp_path):
+        """Intra-doc repetition (even with divergent values) does not trigger
+        a conflict — only cross-doc divergence counts."""
+        self._write(
+            tmp_path / "CLAUDE.md",
+            "PaymentService.java (1497)\n... later in the doc ...\nPaymentService.java (1200)\n",
+        )
+        findings = fact_value_conflict_check(str(tmp_path), self._cfg())
+        assert findings == []
+
+    def test_no_fact_patterns_no_check(self, tmp_path):
+        """Empty/absent fact_patterns → check is a no-op."""
+        self._write(tmp_path / "CLAUDE.md", "PaymentService.java (1497)\n")
+        self._write(tmp_path / "REFERENCE.md", "PaymentService.java (1200)\n")
+
+        cfg = self._cfg()
+        cfg["fact_patterns"] = []
+        assert fact_value_conflict_check(str(tmp_path), cfg) == []
+
+    def test_run_audit_wires_check(self, tmp_path):
+        """run_audit includes FACT_VALUE_CONFLICT findings when fact_patterns set."""
+        self._write(tmp_path / "CLAUDE.md", "WorkService.java (1119)\n")
+        self._write(tmp_path / "REFERENCE.md", "WorkService.java (9999)\n")
+
+        all_findings = run_audit(str(tmp_path), self._cfg())
+        fvc = [f for f in all_findings if f.drift_type == DriftType.FACT_VALUE_CONFLICT]
+        assert len(fvc) == 1
+
+    def test_detail_cites_all_sites_with_line_numbers(self, tmp_path):
+        """Finding detail lists every (doc:line, value) tuple so the user can
+        see where each divergent value lives."""
+        self._write(
+            tmp_path / "CLAUDE.md",
+            "Header\n\nAIProviderManager.java (1425)\n",
+        )
+        self._write(
+            tmp_path / "REFERENCE.md",
+            "# Ref\n\n\nAIProviderManager.java (2000)\n",
+        )
+        findings = fact_value_conflict_check(str(tmp_path), self._cfg())
+        assert len(findings) == 1
+        detail = findings[0].detail
+        # CLAUDE.md line 3 = "AIProviderManager.java (1425)"
+        # REFERENCE.md line 4 = "AIProviderManager.java (2000)"
+        assert "CLAUDE.md:3" in detail
+        assert "REFERENCE.md:4" in detail
+
+    def test_validate_config_catches_bad_fact_patterns(self):
+        """Schema validation surfaces malformed fact_patterns entries."""
+        cases = [
+            {"fact_patterns": "not-a-list"},
+            {"fact_patterns": [{"regex": "x", "key_group": 1, "value_group": 2}]},    # missing name
+            {"fact_patterns": [{"name": "n", "key_group": 1, "value_group": 2}]},     # missing regex
+            {"fact_patterns": [{"name": "n", "regex": "x", "key_group": 0, "value_group": 2}]},  # key_group < 1
+            {"fact_patterns": [{"name": "n", "regex": "(", "key_group": 1, "value_group": 1}]},  # invalid regex
+        ]
+        for extra in cases:
+            cfg = {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"}}
+            cfg.update(extra)
+            errors = validate_config(cfg)
+            assert any("fact_patterns" in e for e in errors), f"missed: {extra}"

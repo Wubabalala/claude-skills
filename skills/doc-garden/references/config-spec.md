@@ -29,12 +29,20 @@
   "staleness_threshold_days": 14,
   "ignore_paths": ["node_modules/", ".git/"],
   "ignore_url_prefixes": ["/api/", "/admin/"],
-  "generic_path_fallbacks": ["frontend/src/", "backend/src/main/java/com/example/"]
+  "generic_path_fallbacks": ["frontend/src/", "backend/src/main/java/com/example/"],
+  "fact_patterns": [
+    {
+      "name": "file_line_count",
+      "regex": "([\\w.-]+\\.(?:java|vue|py))\\s*\\((\\d{3,})\\)",
+      "key_group": 1,
+      "value_group": 2
+    }
+  ]
 }
 ```
 
 **Required fields**: `project_type`, `doc_hierarchy.layer1`
-**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`
+**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`, `fact_patterns`
 **Never stored**: memory directory path (derived at runtime from cwd)
 
 ### `doc_patterns`
@@ -117,6 +125,53 @@ Default: `[]`.
 
 **Order matters**: first existing file wins. Typical order is most-common
 first (e.g. frontend before backend for a frontend-heavy project).
+
+### `fact_patterns`
+
+Enables the FACT_VALUE_CONFLICT drift check (see drift-taxonomy.md §6.5).
+A fact pattern names a regex that extracts a `(key, value)` pair from each
+matching line across all docs. When the same `(pattern_name, key)` pair
+surfaces in ≥2 distinct docs with ≥2 distinct values, a warning fires.
+
+Each entry:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Label used in the finding detail (e.g. `"file_line_count"`, `"backend_port"`). |
+| `regex` | yes | Python regex compiled once per check run. Must capture `key_group` and `value_group`. Invalid regex → schema error, pattern skipped. |
+| `key_group` | yes | 1-based regex group index identifying the fact *key* (what's being described — e.g. a filename or service name). |
+| `value_group` | yes | 1-based regex group index identifying the fact *value* (the number/string that must agree across docs). |
+
+Intra-doc repetition is ignored: only cross-doc divergence triggers a
+finding. A finding names every `(doc:line, value)` site so the user can
+decide which is authoritative.
+
+Default: `[]` (check disabled).
+
+**Typical uses**:
+
+- File line counts (`PaymentService.java (1497)` vs `(1200)`)
+- Port pins, version pins repeated across module docs
+- Environment URL / domain cited in summaries
+
+Example:
+
+```json
+"fact_patterns": [
+  {
+    "name": "file_line_count",
+    "regex": "([\\w.-]+\\.(?:java|vue|py|js|ts))\\s*\\((\\d{3,})\\)",
+    "key_group": 1,
+    "value_group": 2
+  },
+  {
+    "name": "backend_port",
+    "regex": "(backend|api).{0,20}?port[:= ]+(\\d{4,5})",
+    "key_group": 1,
+    "value_group": 2
+  }
+]
+```
 
 ## Target Skeletons by Project Type
 

@@ -122,6 +122,40 @@ Eight categories of documentation drift, with detection algorithms and severity.
 
 **Silently skips**: non-git projects, untracked files (including previously-committed files that were subsequently `git rm`'d and added to `.gitignore` — `_is_git_tracked` checks current tracking status via `git ls-files --error-unmatch`, not historical commits), files with no git history
 
+## 6.5 Fact Value Conflict
+
+**What**: A configured fact key (e.g. file line count, version pin, port) is cited in multiple docs with different values.
+
+| Severity | Condition |
+|----------|-----------|
+| WARNING | Same `(pattern_name, key)` found in ≥2 distinct docs with ≥2 distinct values |
+
+**Truth source**: user-configured `fact_patterns` — each with `{name, regex, key_group, value_group}`
+
+**Algorithm**:
+1. For each entry in `fact_patterns`, compile the regex
+2. For each doc in `collect_doc_files(cwd, config)`: read line-by-line, apply regex, extract `(key, value)` via the configured group indices
+3. Group observations by `(pattern_name, key)` → `{value: [(doc, line), ...]}`
+4. If a key has ≥2 distinct values AND participants span ≥2 distinct docs → emit finding
+5. Intra-doc repetition (same key multiple times in a single file) never triggers a finding — only cross-doc divergence counts
+
+**Example fact_pattern** (file line count drift):
+
+```json
+{
+  "name": "file_line_count",
+  "regex": "([\\w.-]+\\.(?:java|vue|py|js|ts))\\s*\\((\\d{3,})\\)",
+  "key_group": 1,
+  "value_group": 2
+}
+```
+
+**Verification path** (in fix_suggestion):
+1. Pick the authoritative source (usually the file whose line count is most-recently auto-computed)
+2. Update the other docs to match, or have them reference the canonical source instead of duplicating the value
+
+**Why not a custom hook**: this pattern is common enough (line counts, versions, ports, URLs) that a regex-driven config is cheaper than implementing per-project Python. Custom hooks remain available for facts where regex can't express the semantic.
+
 ## 7. Missing Skeleton Sections (normalize)
 
 **What**: CLAUDE.md lacks required sections for its project type.
