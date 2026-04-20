@@ -31,7 +31,7 @@ Eight categories of documentation drift, with detection algorithms and severity.
 
 **Algorithm**:
 1. Extract paths from CLAUDE.md: backtick patterns and markdown links `[text](path)`
-2. Filter out: URLs, anchors, `ignore_paths`, server absolute paths (`/opt/`, `/apps/`), Windows drive paths (`C:/`, git-bash `/c/` `/d/`), branch names (`devlop/`), timezone strings (`Asia/`), content inside fenced code blocks, plus per-project `ignore_url_prefixes` (opt-in HTTP endpoint prefixes like `/api/`, `/admin/`)
+2. Filter out: URLs, anchors, `ignore_paths`, server absolute paths (`/opt/`, `/apps/`), Windows drive paths (`C:/`, git-bash `/c/` `/d/`), branch names (`devlop/`), timezone strings (`Asia/`), content inside fenced code blocks, plus per-project `ignore_url_prefixes` (opt-in HTTP endpoint prefixes like `/api/`, `/admin/`), plus bare filenames without `/` when `skip_bare_filenames: true`
 3. Resolve in this order:
    a. `path_resolvers` prefix match (memory/, plans/, or user-defined)
    b. Generic fallback: doc location, project root, module root glob

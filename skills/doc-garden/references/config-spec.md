@@ -30,6 +30,7 @@
   "ignore_paths": ["node_modules/", ".git/"],
   "ignore_url_prefixes": ["/api/", "/admin/"],
   "generic_path_fallbacks": ["frontend/src/", "backend/src/main/java/com/example/"],
+  "skip_bare_filenames": false,
   "fact_patterns": [
     {
       "name": "file_line_count",
@@ -51,7 +52,7 @@
 ```
 
 **Required fields**: `project_type`, `doc_hierarchy.layer1`
-**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`, `fact_patterns`, `entity_patterns`, `entity_policy_file`
+**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`, `skip_bare_filenames`, `fact_patterns`, `entity_patterns`, `entity_policy_file`
 **Never stored**: memory directory path (derived at runtime from cwd)
 
 ### `doc_patterns`
@@ -134,6 +135,26 @@ Default: `[]`.
 
 **Order matters**: first existing file wins. Typical order is most-common
 first (e.g. frontend before backend for a frontend-heavy project).
+
+### `skip_bare_filenames`
+
+Boolean flag (default `false`). When `true`, paths that contain no `/`
+separator at all — "bare filenames" like `PaymentService.java`,
+`aiModes.js`, `deploy.sh` — are skipped during PATH_ROT checking.
+
+**Why opt-in**: bare filenames are ambiguous. They might be:
+
+- Authoritative references ("this file exists at this name somewhere")
+- Identifier-style mentions ("the `aiModes.js` entry point" — prose naming, not claim)
+- Typo risk surfaces (wrong basename → silently wrong)
+
+Projects whose docs use **full paths** (`src/config/aiModes.js`) for
+authoritative references should enable this to silence identifier-style
+mentions. Projects using **bare filenames** as lookups gain typo
+protection by leaving it off.
+
+Paths with any `/` are unaffected — `utils/SafeCollections.java` is
+still checked against the filesystem.
 
 ### `fact_patterns`
 

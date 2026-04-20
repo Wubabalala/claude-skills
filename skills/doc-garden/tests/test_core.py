@@ -289,6 +289,36 @@ class TestPathRotCheck:
         assert not any("/d/work" in d for d in rot_paths), rot_paths
         assert not any("/c/Users" in d for d in rot_paths), rot_paths
 
+    def test_skip_bare_filenames_opt_in(self, tmp_path):
+        """With skip_bare_filenames=True, paths without `/` are not PATH_ROT
+        even when the file doesn't exist. Paths WITH `/` still checked."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Bare: `aiModes.js`, `PaymentService.java`\n"
+            "Full: `src/missing.py`\n",
+            encoding="utf-8",
+        )
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "ignore_paths": [],
+            "skip_bare_filenames": True,
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("aiModes.js" in d for d in rot_paths), rot_paths
+        assert not any("PaymentService.java" in d for d in rot_paths), rot_paths
+        # Full path missing → still reported
+        assert any("missing.py" in d for d in rot_paths), rot_paths
+
+    def test_skip_bare_filenames_default_still_flags(self, tmp_path):
+        """Default (False) keeps existing behaviour — bare filenames checked."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Bare: `aiModes.js`\n", encoding="utf-8",
+        )
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert any("aiModes.js" in d for d in rot_paths), rot_paths
+
     def test_path_rot_still_catches_real_two_segment_paths(self, tmp_path):
         """Regression guard: 2-segment paths WITH extension must still be checked."""
         (tmp_path / "CLAUDE.md").write_text(
@@ -1190,6 +1220,12 @@ class TestValidateConfigNew:
         }
         errors = validate_config(cfg)
         assert any("layer1" in e and "non-empty" in e for e in errors)
+
+    def test_catches_bad_skip_bare_filenames(self):
+        cfg = {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"},
+               "skip_bare_filenames": "yes"}
+        errors = validate_config(cfg)
+        assert any("skip_bare_filenames" in e for e in errors)
 
     def test_layer1_missing_soft_when_doc_patterns_set(self, tmp_path):
         """run_audit downgrades 'Missing layer1' to WARNING if doc_patterns is set.

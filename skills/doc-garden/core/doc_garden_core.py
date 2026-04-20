@@ -72,6 +72,13 @@ DEFAULT_CONFIG = {
     # the tool prepends each in order and checks existence.
     # Example: ["frontend/src/", "backend/src/main/java/com/example/"].
     "generic_path_fallbacks": [],
+    # When True, bare filenames (paths without any `/`, e.g. `aiModes.js`,
+    # `PaymentService.java`) are skipped during PATH_ROT. Docs often mention
+    # filenames as identifiers or quick references rather than as authoritative
+    # "this file exists here" claims; projects with strong index/reference
+    # doc conventions use the full path (`src/config/aiModes.js`) in those
+    # cases. Default False for backward compatibility — opt in per project.
+    "skip_bare_filenames": False,
     # Fact patterns for FACT_VALUE_CONFLICT: the same fact key appearing in
     # multiple docs must agree on its value. Each entry:
     #   name:         human-readable label, used in findings
@@ -753,6 +760,11 @@ def _is_local_repo_path(path_str: str, config: Optional[dict] = None) -> bool:
     has_extension = '.' in path_str.split('/')[-1]
     has_slash = '/' in path_str
     if not has_extension and not has_slash:
+        return False
+    # Opt-in: skip bare filenames (no `/` at all). Projects with strong
+    # index-doc conventions use full paths for authoritative references;
+    # bare filenames in docs tend to be identifier-style mentions.
+    if config and config.get("skip_bare_filenames") and not has_slash:
         return False
     # GitHub org/repo pattern: single slash, no extension in last segment.
     # e.g. "duanyytop/agents-radar" — but NOT "src/main.py" (last segment has extension)
@@ -2284,6 +2296,11 @@ def validate_config(config: dict) -> list:
                 for g in ("key_group", "value_group"):
                     if not isinstance(fp.get(g), int) or fp.get(g) < 1:
                         errors.append(f"fact_patterns[{i}] '{g}' must be a positive int (1-based regex group index)")
+
+    # skip_bare_filenames: optional bool flag
+    sbf = config.get("skip_bare_filenames")
+    if sbf is not None and not isinstance(sbf, bool):
+        errors.append("skip_bare_filenames must be a boolean")
 
     # entity_patterns: optional; each entry needs name + source_glob + entity_pattern + ref_scope
     entity_patterns = config.get("entity_patterns")
