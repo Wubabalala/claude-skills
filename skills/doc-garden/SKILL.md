@@ -1,13 +1,15 @@
 ---
 name: doc-audit
 description: >
-  Documentation drift auditor and normalizer for multi-layer CLAUDE.md projects.
+  Documentation drift auditor and normalizer for CLAUDE.md / AGENTS.md
+  projects (supports Claude Code, Codex, and any project using agent
+  instruction files at root and/or per module).
   Use when the user says "audit docs", "check doc freshness", "doc drift",
   "docs out of date", "文档审计", "文档漂移", "检查文档", "文档同步",
   "memory index", "MEMORY.md check", "normalize docs", "整理文档",
   "更新文档", "update docs", "doc health", "文档健康".
   Also triggers implicitly when user mentions stale docs, wrong ports in
-  CLAUDE.md, or missing memory entries.
+  CLAUDE.md / AGENTS.md, or missing memory entries.
 user-invocable: true
 allowed-tools:
   - Read
@@ -55,6 +57,13 @@ On audit trigger:
 2. User says "update config" or "重新生成配置" → re-enter generation workflow
 ```
 
+`load_config()` `deep_merge`s the user's file on top of `DEFAULT_CONFIG`, so a
+stale config missing newer fields (e.g. `doc_patterns`, `path_resolvers`)
+inherits sensible defaults automatically. User values always win; lists are
+replaced wholesale (not concatenated); an explicit empty `doc_hierarchy: {}`
+is respected as opt-out of declared hierarchy (pattern discovery still
+applies).
+
 ### Config Generation Workflow (first run or explicit update)
 
 This is a **guided interactive flow**, not an auto-generate-and-save.
@@ -98,6 +107,14 @@ Please review:
 - Call `save_config(cwd, config)`
 - Confirm: "Config saved to .claude/doc-garden.json"
 
+> **If `_discovery.warning` is present** (typically "no CLAUDE.md or AGENTS.md
+> found at root — layer1 defaulted to 'CLAUDE.md' but the file does not
+> exist"), the warning is **stripped by `save_config` at persist time and
+> does not survive to disk**. Do not ignore it on the way past: prompt the
+> user to create a root doc (CLAUDE.md or AGENTS.md) before saving, or
+> acknowledge that downstream checks (structure/staleness) will report the
+> missing root as long as it stays absent.
+
 **Step 5: Proceed** — run audit with the confirmed config
 
 **Key principles**:
@@ -113,10 +130,35 @@ Please review:
 
 ### Phase 1: Scan & Index
 
-Batch these reads in parallel:
-- `Glob("**/CLAUDE.md")` — find all CLAUDE.md files
-- Resolve memory directory (runtime: `cwd → project_name` mapping)
-- Load `.claude/doc-garden.json` (or trigger Config Generation Workflow)
+**Step 1 (MANDATORY): Invoke the engine first.** Before any manual Glob /
+Read exploration, call `run_audit()` and parse the structured findings. This
+catches the classes of drift the engine is designed for (path rot, memory
+index, schema errors, custom CONTENT_DRIFT) deterministically and fast.
+
+```python
+from pathlib import Path
+from core.doc_garden_core import run_audit, format_report, load_config
+cfg = load_config(cwd)
+findings = run_audit(cwd, cfg)
+print(format_report(findings, project_name=Path(cwd).name))
+```
+
+Only after digesting the report do manual follow-up for engine blind spots:
+semantic audit (below), overlap review, or anything content-specific the
+custom hook hasn't modelled. The 2026-04-20 incident that motivated this
+rule: skill was invoked but the operator did manual Grep instead of running
+`run_audit`, produced 5 false-positive PATH_ROT readings from reading the
+docs by hand, and missed the actual CONTENT_DRIFT that the engine would
+have surfaced with the custom hook in place.
+
+Supporting context reads (after Step 1):
+- Memory directory: `resolve_memory_dir(cwd)` resolves the per-project
+  location; existence is not guaranteed.
+- `.claude/doc-garden.json`: `has_config(cwd)` tells whether user has
+  committed to a config. If missing, enter Config Generation Workflow.
+- Doc files actually scanned: `collect_doc_files(cwd, cfg)` returns the
+  exact list the engine will audit — union of `doc_hierarchy.layer1/layer2/docs`
+  and pattern discovery via `doc_patterns`.
 
 ### Phase 2: Deep Audit
 
@@ -129,10 +171,21 @@ Run applicable checks from `references/drift-taxonomy.md`:
    - GHOST: MEMORY.md references a file that doesn't exist
    - For each sunken file: read frontmatter `type` field, guess target section
 
-2. **Path Rot** — file paths in CLAUDE.md that don't exist on disk
-   - Extract paths from backtick blocks and markdown links (skip URLs and fenced code blocks)
-   - Resolve candidate locations in order: doc location → project root → module root (for module docs) → `resolve_memory_dir(cwd)` (when path starts with `memory/`) → `~/.claude/plans/` (when path starts with `plans/`) → glob walk within module root (for nested module paths)
-   - A finding fires only if **none** of the candidates exist
+2. **Path Rot** — file paths in doc files that don't exist on disk
+   - Scans every doc returned by `collect_doc_files(cwd, config)` (union of
+     `doc_hierarchy` entries and `doc_patterns` walk discovery)
+   - Extracts paths from backtick blocks and markdown links (skips URLs and
+     fenced code blocks)
+   - Delegates to `resolve_reference(path_str, doc_abs, cwd, config)` which:
+     - Matches configured `path_resolvers` by prefix (default: `memory/` →
+       `$CLAUDE_MEMORY_DIR`, `plans/` → `$HOME/.claude/plans`, both `optional`)
+     - `optional: true` resolver whose root doesn't exist → status `skip`
+       (no finding; intentional for cross-environment authoring)
+     - Matched resolver whose root exists → builds candidate and checks
+     - No prefix match → falls back to generic resolution (doc location,
+       project root, module glob)
+   - Emits PATH_ROT only when status is `missing`; `exists` and `skip`
+     produce nothing
    - Skip paths matching `ignore_paths` from config
 
 **Microservice/monorepo only** (when `layer2` + `environment_domains` defined):
@@ -246,6 +299,71 @@ Extending the filter: if a whole class of paths legitimately appears in your doc
 
 ---
 
+## Custom Project Checks (`.claude/doc-garden-checks.py`)
+
+Mechanical audit catches generic drift (broken paths, missing memory index,
+bad config schema). Some drift is **project-specific content divergence**
+the engine cannot know about — e.g. "CLAUDE.md declares primary target
+LlamaIndex but `memory/project_plan.md` still says Dubbo". Wire these into
+the audit via a custom hook at `<project>/.claude/doc-garden-checks.py`.
+
+### Contract
+
+```python
+# <project>/.claude/doc-garden-checks.py
+from core.doc_garden_core import Finding, DriftType, Severity
+
+def run_custom_checks(cwd: str, config: dict) -> list[Finding]:
+    """Return a list of Finding instances. Empty list is fine."""
+    findings = []
+    # ... your cross-file / content drift logic ...
+    # findings.append(Finding(drift_type=DriftType.CONTENT_DRIFT, ...))
+    return findings
+```
+
+**The import line is non-negotiable.** `isinstance(item, Finding)` in the
+runner is module-identity-sensitive: if a custom check imports `Finding`
+via a `sys.path` hack or a different module path, Python treats it as a
+different class object and the runner rejects every finding it returns.
+`from core.doc_garden_core import Finding` — verbatim — is the only form
+that works.
+
+### Failure isolation
+
+The runner wraps the entire load + invocation in defensive layers. If the
+custom file:
+
+- Doesn't exist → silently skipped.
+- Raises on import or execution → one `CUSTOM_CHECK_ERROR` finding, audit
+  continues.
+- Returns a non-list → one `CUSTOM_CHECK_ERROR` finding.
+- Returns a list with non-Finding items → one `CUSTOM_CHECK_ERROR` per
+  bad item; valid Finding items are still kept.
+
+You do not need defensive `try/except` inside check functions. If you want
+to distinguish "check ran, found nothing" from "check crashed", catch your
+own errors and return `[]`.
+
+### What belongs in a custom check
+
+Project-specific content drift the engine can't generically model:
+
+- CLAUDE.md declares a fact (version, port, primary target, schedule
+  budget) that a sibling doc also claims differently.
+- A module doc's tech stack pin differs from the root index.
+- A README's copy-pasted quickstart no longer matches the actual script.
+
+**Do not** reimplement checks the engine already provides:
+
+- Path existence → use `path_resolvers` in config, not a custom check.
+- Memory index sunken/ghost → built-in.
+- Staleness against git → built-in.
+
+See `examples/doc-garden-checks.example.py` for a template with detailed
+inline notes.
+
+---
+
 ## Semantic Audit (human-in-the-loop)
 
 Triggered by: `/doc-audit-semantic`, or when user says "semantic drift", "语义漂移", "语义审计".
@@ -313,13 +431,24 @@ All detection logic lives in `core/doc_garden_core.py`. This skill and hooks are
 
 Key functions:
 - `memory_index_check(cwd)` → sunken/ghost findings
-- `path_rot_check(cwd, config)` → dead path findings
+- `path_rot_check(cwd, config)` → dead path findings (uses `resolve_reference`)
 - `check_skeleton(cwd, config)` → missing sections/docs
 - `check_frontmatter(cwd)` → missing YAML frontmatter
 - `run_normalize(cwd, config)` → all normalize checks
 - `generate_root_skeleton(type)` → CLAUDE.md template
-- `detect_project_type(cwd)` → heuristic type + CLAUDE.md list
+- `detect_project_type(cwd, config=None)` → heuristic type + doc files list (uses `doc_patterns`; `config=None` falls back to `DEFAULT_CONFIG`)
 - `resolve_memory_dir(cwd)` → runtime memory path
-- `run_audit(cwd, config)` → all applicable drift checks
-- `format_report(findings)` → audit markdown table
+- `resolve_reference(path_str, doc_abs, cwd, config)` → `ResolveResult(status, candidates, reason)` — the pluggable path resolver honoring `path_resolvers`
+- `collect_doc_files(cwd, config)` → union of `doc_hierarchy` + `doc_patterns` walk, deduped and stably sorted
+- `deep_merge(default, user)` → config layering (lists replace, dicts recurse, `doc_hierarchy: {}` respected as opt-out)
+- `load_config(cwd)` → deep-merged config from `.claude/doc-garden.json` over `DEFAULT_CONFIG`
+- `validate_config(config)` → list of error strings (schema + field presence)
+- `run_audit(cwd, config=None)` → all applicable drift checks; auto-loads config if omitted; runs `validate_config` + schema findings + built-in checks + custom hook (see Custom Project Checks section)
+- `format_report(findings, project_name="")` → audit markdown table
 - `format_normalize_report(items)` → normalize markdown table
+
+Data types:
+- `Severity` — `CRITICAL` / `WARNING` / `INFO`
+- `DriftType` — `MEMORY_INDEX_SUNKEN` / `MEMORY_INDEX_GHOST` / `PATH_ROT` / `CONFIG_VALUE_DRIFT` / `CROSS_LAYER_CONTRADICTION` / `STRUCTURE_DRIFT` / `STALENESS` / `CONTENT_DRIFT` / `CUSTOM_CHECK_ERROR` / `CONFIG_SCHEMA_WARNING`
+- `Finding(drift_type, severity, file, detail, fix_suggestion="", auto_fixable=False, section_hint="")`
+- `ResolveResult(status: "exists" | "missing" | "skip", candidates: list[str], reason: str)`

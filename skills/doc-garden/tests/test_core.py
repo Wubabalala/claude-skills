@@ -31,10 +31,17 @@ from core.doc_garden_core import (
     load_config,
     DriftType,
     Severity,
+    Finding,
     _parse_memory_index,
     _guess_section,
     _read_frontmatter_type,
     DEFAULT_CONFIG,
+    deep_merge,
+    collect_doc_files,
+    resolve_reference,
+    ResolveResult,
+    run_audit,
+    format_report,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -188,7 +195,13 @@ class TestPathRotCheck:
             "See `memory/reference_foo.md` for details.\n", encoding="utf-8"
         )
 
-        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "path_resolvers": [
+                {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": True},
+            ],
+            "ignore_paths": [],
+        }
         findings = path_rot_check(str(tmp_path), config)
         rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
         assert not any("reference_foo.md" in d for d in rot_paths), rot_paths
@@ -204,7 +217,13 @@ class TestPathRotCheck:
             "See `memory/missing.md`.\n", encoding="utf-8"
         )
 
-        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "path_resolvers": [
+                {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": True},
+            ],
+            "ignore_paths": [],
+        }
         findings = path_rot_check(str(tmp_path), config)
         assert any(
             "missing.md" in f.detail
@@ -226,7 +245,13 @@ class TestPathRotCheck:
             "See `plans/my_plan.md`.\n", encoding="utf-8"
         )
 
-        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "path_resolvers": [
+                {"prefix": "plans/", "root": "$HOME/.claude/plans", "optional": True},
+            ],
+            "ignore_paths": [],
+        }
         findings = path_rot_check(str(tmp_path), config)
         rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
         assert not any("my_plan.md" in d for d in rot_paths), rot_paths
@@ -342,7 +367,9 @@ class TestGenerateDraftConfig:
         draft = generate_draft_config(str(tmp_path))
         d = draft["_discovery"]
         assert "detected_type" in d
-        assert "claude_md_count" in d
+        assert "doc_count" in d
+        assert "doc_files" in d
+        assert "layer1_chosen" in d
         assert "memory_dir_exists" in d
 
     def test_has_default_fields(self, tmp_path):
@@ -659,3 +686,400 @@ class TestTranscriptParsing:
     def test_resolve_module(self):
         assert resolve_module_from_path("D:/work/project/api/src/Main.java", "D:/work/project") == "api"
         assert resolve_module_from_path("D:/work/project/README.md", "D:/work/project") == ""
+
+
+# ---------------------------------------------------------------------------
+# New features (multi-format discovery + deep_merge + resolver + custom hook)
+# ---------------------------------------------------------------------------
+
+class TestDeepMerge:
+    def test_preserves_user_overrides(self):
+        default = {"a": 1, "b": {"c": 2}, "tags": ["x"]}
+        user = {"a": 99, "b": {"c": 100}, "tags": ["y", "z"]}
+        result = deep_merge(default, user)
+        assert result["a"] == 99
+        assert result["b"]["c"] == 100
+        # Lists are replaced wholesale, not concatenated
+        assert result["tags"] == ["y", "z"]
+
+    def test_new_fields_inherit(self):
+        """Old user config missing doc_patterns/path_resolvers → inherits from DEFAULT."""
+        old_user = {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "staleness_threshold_days": 7,
+            "ignore_paths": ["node_modules/"],
+        }
+        merged = deep_merge(DEFAULT_CONFIG, old_user)
+        assert merged["doc_patterns"] == DEFAULT_CONFIG["doc_patterns"]
+        assert merged["path_resolvers"] == DEFAULT_CONFIG["path_resolvers"]
+        # User's override survives
+        assert merged["staleness_threshold_days"] == 7
+
+    def test_empty_hierarchy_respected(self):
+        """doc_hierarchy: {} is explicit opt-out; do not backfill layer1."""
+        user = {"doc_hierarchy": {}}
+        merged = deep_merge(DEFAULT_CONFIG, user)
+        assert merged["doc_hierarchy"] == {}
+        # But doc_patterns still inherited
+        assert "doc_patterns" in merged
+
+    def test_does_not_mutate_inputs(self):
+        default = {"a": {"b": 1}}
+        user = {"a": {"c": 2}}
+        deep_merge(default, user)
+        assert default == {"a": {"b": 1}}
+        assert user == {"a": {"c": 2}}
+
+
+class TestCollectDocFiles:
+    def test_union_of_hierarchy_and_patterns(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("root", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("agents", encoding="utf-8")
+        (tmp_path / "module-a").mkdir()
+        (tmp_path / "module-a" / "CLAUDE.md").write_text("mod a", encoding="utf-8")
+
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md", "layer2": ["module-a/CLAUDE.md"]},
+            "doc_patterns": ["CLAUDE.md", "AGENTS.md"],
+            "ignore_paths": [],
+        }
+        result = collect_doc_files(str(tmp_path), config)
+        assert "CLAUDE.md" in result
+        assert "AGENTS.md" in result
+        assert "module-a/CLAUDE.md" in result
+        # Dedup: "CLAUDE.md" not duplicated from both hierarchy and discovery
+        assert result.count("CLAUDE.md") == 1
+
+    def test_stable_order(self, tmp_path):
+        """Root docs first (0 slashes), then 1-level (1 slash), etc; alpha within tier."""
+        (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("", encoding="utf-8")
+        (tmp_path / "z-mod").mkdir()
+        (tmp_path / "z-mod" / "CLAUDE.md").write_text("", encoding="utf-8")
+        (tmp_path / "a-mod").mkdir()
+        (tmp_path / "a-mod" / "CLAUDE.md").write_text("", encoding="utf-8")
+
+        config = {"doc_patterns": ["CLAUDE.md", "AGENTS.md"], "ignore_paths": []}
+        result = collect_doc_files(str(tmp_path), config)
+        # Root docs (no slash) come before module docs, alpha within each tier
+        assert result == ["AGENTS.md", "CLAUDE.md", "a-mod/CLAUDE.md", "z-mod/CLAUDE.md"]
+
+    def test_without_layer1(self, tmp_path):
+        """doc_hierarchy: {} + doc_patterns still finds docs via walk."""
+        (tmp_path / "AGENTS.md").write_text("", encoding="utf-8")
+        config = {
+            "doc_hierarchy": {},
+            "doc_patterns": ["AGENTS.md"],
+            "ignore_paths": [],
+        }
+        result = collect_doc_files(str(tmp_path), config)
+        assert result == ["AGENTS.md"]
+
+    def test_prunes_ignore_paths(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
+        (tmp_path / "node_modules").mkdir()
+        (tmp_path / "node_modules" / "CLAUDE.md").write_text("", encoding="utf-8")
+        config = {
+            "doc_patterns": ["CLAUDE.md"],
+            "ignore_paths": ["node_modules/"],  # trailing slash — normalization required
+        }
+        result = collect_doc_files(str(tmp_path), config)
+        assert "node_modules/CLAUDE.md" not in result
+        assert "CLAUDE.md" in result
+
+
+class TestDetectProjectTypeAgentsMd:
+    def test_agents_only_standalone(self, tmp_path):
+        (tmp_path / "AGENTS.md").write_text("", encoding="utf-8")
+        ptype, docs = detect_project_type(str(tmp_path))
+        assert ptype == "standalone"
+        assert docs == ["AGENTS.md"]
+
+    def test_two_root_docs_still_standalone(self, tmp_path):
+        """CLAUDE.md + AGENTS.md at root is still 1 directory → standalone.
+        Regression guard: prior heuristic counted total doc files and would
+        have misclassified this as 'monorepo'."""
+        (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("", encoding="utf-8")
+        ptype, docs = detect_project_type(str(tmp_path))
+        assert ptype == "standalone"
+        assert set(docs) == {"CLAUDE.md", "AGENTS.md"}
+
+    def test_root_plus_one_module_monorepo(self, tmp_path):
+        """Root doc + one module doc = 2 dirs → monorepo."""
+        (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
+        (tmp_path / "mod-a").mkdir()
+        (tmp_path / "mod-a" / "CLAUDE.md").write_text("", encoding="utf-8")
+        ptype, _ = detect_project_type(str(tmp_path))
+        assert ptype == "monorepo"
+
+    def test_root_plus_two_modules_microservice(self, tmp_path):
+        """Root + 2 modules = 3 dirs → microservice."""
+        (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
+        for mod in ("mod-a", "mod-b"):
+            (tmp_path / mod).mkdir()
+            (tmp_path / mod / "CLAUDE.md").write_text("", encoding="utf-8")
+        ptype, _ = detect_project_type(str(tmp_path))
+        assert ptype == "microservice"
+
+
+class TestGenerateDraftConfigNew:
+    def test_agents_only(self, tmp_path):
+        """AGENTS-only repo: layer1 should be AGENTS.md (not CLAUDE.md)."""
+        (tmp_path / "AGENTS.md").write_text("# Project", encoding="utf-8")
+        draft = generate_draft_config(str(tmp_path))
+        assert draft["doc_hierarchy"]["layer1"] == "AGENTS.md"
+        assert draft["_discovery"]["layer1_chosen"] == "AGENTS.md"
+        assert draft["_discovery"]["root_agents_md_present"] is True
+        assert "warning" not in draft["_discovery"]
+
+    def test_no_root_doc_warns(self, tmp_path):
+        """Neither CLAUDE.md nor AGENTS.md at root → layer1 falls back + warning."""
+        # Put a subdir doc so detect_project_type has something to find
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "CLAUDE.md").write_text("", encoding="utf-8")
+        draft = generate_draft_config(str(tmp_path))
+        assert draft["doc_hierarchy"]["layer1"] == "CLAUDE.md"  # fallback
+        assert draft["_discovery"]["root_claude_md_present"] is False
+        assert draft["_discovery"]["root_agents_md_present"] is False
+        assert "warning" in draft["_discovery"]
+
+    def test_claude_md_wins_over_agents_md(self, tmp_path):
+        """Both present → CLAUDE.md picked (Claude Code convention)."""
+        (tmp_path / "CLAUDE.md").write_text("", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("", encoding="utf-8")
+        draft = generate_draft_config(str(tmp_path))
+        assert draft["doc_hierarchy"]["layer1"] == "CLAUDE.md"
+
+
+class TestResolveReference:
+    def test_memory_exists(self, tmp_path, monkeypatch):
+        fake_mem = tmp_path / "mem"
+        fake_mem.mkdir()
+        (fake_mem / "foo.md").write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            "core.doc_garden_core.resolve_memory_dir", lambda cwd: str(fake_mem)
+        )
+        config = {
+            "path_resolvers": [
+                {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": True},
+            ],
+        }
+        result = resolve_reference(
+            "memory/foo.md", str(tmp_path / "CLAUDE.md"), str(tmp_path), config
+        )
+        assert result.status == "exists"
+
+    def test_memory_missing(self, tmp_path, monkeypatch):
+        fake_mem = tmp_path / "mem"
+        fake_mem.mkdir()  # root exists, file inside doesn't
+        monkeypatch.setattr(
+            "core.doc_garden_core.resolve_memory_dir", lambda cwd: str(fake_mem)
+        )
+        config = {
+            "path_resolvers": [
+                {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": True},
+            ],
+        }
+        result = resolve_reference(
+            "memory/ghost.md", str(tmp_path / "CLAUDE.md"), str(tmp_path), config
+        )
+        assert result.status == "missing"
+
+    def test_optional_resolver_skip_when_root_missing(self, tmp_path, monkeypatch):
+        """Optional resolver whose root does not exist → skip, no finding."""
+        nonexistent = tmp_path / "does-not-exist"
+        monkeypatch.setattr(
+            "core.doc_garden_core.resolve_memory_dir", lambda cwd: str(nonexistent)
+        )
+        config = {
+            "path_resolvers": [
+                {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": True},
+            ],
+        }
+        result = resolve_reference(
+            "memory/foo.md", str(tmp_path / "CLAUDE.md"), str(tmp_path), config
+        )
+        assert result.status == "skip"
+        assert "does not exist" in result.reason
+
+    def test_env_placeholder_resolves(self, tmp_path, monkeypatch):
+        """$ENV:VAR placeholder pulls from process environment."""
+        custom_root = tmp_path / "custom-docs"
+        custom_root.mkdir()
+        (custom_root / "note.md").write_text("", encoding="utf-8")
+        monkeypatch.setenv("DG_CUSTOM_ROOT", str(custom_root))
+        config = {
+            "path_resolvers": [
+                {"prefix": "notes/", "root": "$ENV:DG_CUSTOM_ROOT", "optional": False},
+            ],
+        }
+        result = resolve_reference(
+            "notes/note.md", str(tmp_path / "CLAUDE.md"), str(tmp_path), config
+        )
+        assert result.status == "exists"
+
+    def test_env_placeholder_unset_with_optional_skips(self, tmp_path, monkeypatch):
+        """Unset $ENV:VAR + optional resolver → skip (user chose to make it optional)."""
+        monkeypatch.delenv("DG_NEVER_SET", raising=False)
+        config = {
+            "path_resolvers": [
+                {"prefix": "ext/", "root": "$ENV:DG_NEVER_SET", "optional": True},
+            ],
+        }
+        result = resolve_reference(
+            "ext/thing.md", str(tmp_path / "CLAUDE.md"), str(tmp_path), config
+        )
+        assert result.status == "skip"
+
+
+class TestCustomHook:
+    def _write_hook(self, tmp_path, body):
+        hook_dir = tmp_path / ".claude"
+        hook_dir.mkdir()
+        (hook_dir / "doc-garden-checks.py").write_text(body, encoding="utf-8")
+
+    def _minimal_config_with_layer1(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("# Project", encoding="utf-8")
+        return {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+        }
+
+    def test_custom_hook_runs(self, tmp_path):
+        """Hook returning Finding list is integrated into audit findings."""
+        self._write_hook(tmp_path, """
+from core.doc_garden_core import Finding, DriftType, Severity
+def run_custom_checks(cwd, config):
+    return [Finding(
+        drift_type=DriftType.CONTENT_DRIFT,
+        severity=Severity.WARNING,
+        file="custom/file.md",
+        detail="Custom-detected drift",
+        fix_suggestion="Fix it",
+    )]
+""")
+        cfg = self._minimal_config_with_layer1(tmp_path)
+        findings = run_audit(str(tmp_path), cfg)
+        content_drift = [f for f in findings if f.drift_type == DriftType.CONTENT_DRIFT]
+        assert len(content_drift) == 1
+        assert content_drift[0].detail == "Custom-detected drift"
+
+    def test_custom_hook_exception_isolated(self, tmp_path):
+        """Hook raising → CUSTOM_CHECK_ERROR, rest of audit still runs."""
+        self._write_hook(tmp_path, """
+def run_custom_checks(cwd, config):
+    raise RuntimeError("boom")
+""")
+        cfg = self._minimal_config_with_layer1(tmp_path)
+        findings = run_audit(str(tmp_path), cfg)
+        errors = [f for f in findings if f.drift_type == DriftType.CUSTOM_CHECK_ERROR]
+        assert len(errors) == 1
+        assert "RuntimeError" in errors[0].detail
+        assert "boom" in errors[0].detail
+
+    def test_custom_hook_bad_return_type(self, tmp_path):
+        """Hook returning None / dict → CUSTOM_CHECK_ERROR, audit continues."""
+        self._write_hook(tmp_path, """
+def run_custom_checks(cwd, config):
+    return {"not": "a list"}
+""")
+        cfg = self._minimal_config_with_layer1(tmp_path)
+        findings = run_audit(str(tmp_path), cfg)
+        errors = [f for f in findings if f.drift_type == DriftType.CUSTOM_CHECK_ERROR]
+        assert len(errors) == 1
+        assert "list[Finding]" in errors[0].detail
+
+    def test_custom_hook_list_with_bad_item(self, tmp_path):
+        """Hook returning list with non-Finding items → per-item CUSTOM_CHECK_ERROR."""
+        self._write_hook(tmp_path, """
+from core.doc_garden_core import Finding, DriftType, Severity
+def run_custom_checks(cwd, config):
+    return [
+        Finding(drift_type=DriftType.CONTENT_DRIFT, severity=Severity.WARNING,
+                file="ok.md", detail="legit", fix_suggestion=""),
+        "this is not a Finding",
+        42,
+    ]
+""")
+        cfg = self._minimal_config_with_layer1(tmp_path)
+        findings = run_audit(str(tmp_path), cfg)
+        content = [f for f in findings if f.drift_type == DriftType.CONTENT_DRIFT]
+        errors = [f for f in findings if f.drift_type == DriftType.CUSTOM_CHECK_ERROR]
+        # Valid Finding kept, 2 invalid items → 2 CUSTOM_CHECK_ERROR
+        assert len(content) == 1
+        assert len(errors) == 2
+
+
+class TestValidateConfigNew:
+    def test_catches_bad_doc_patterns(self):
+        cases = [
+            {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"},
+             "doc_patterns": []},              # empty list
+            {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"},
+             "doc_patterns": ""},              # not a list
+            {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"},
+             "doc_patterns": [""]},            # empty string item
+        ]
+        for cfg in cases:
+            errors = validate_config(cfg)
+            assert any("doc_patterns" in e for e in errors), f"missed: {cfg}"
+
+    def test_catches_bad_path_resolvers(self):
+        cfg = {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "path_resolvers": [
+                {"prefix": "memory/"},  # missing root
+            ],
+        }
+        errors = validate_config(cfg)
+        assert any("path_resolvers[0]" in e and "root" in e for e in errors)
+
+    def test_catches_empty_string_layer1(self):
+        cfg = {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": ""},
+        }
+        errors = validate_config(cfg)
+        assert any("layer1" in e and "non-empty" in e for e in errors)
+
+    def test_layer1_missing_soft_when_doc_patterns_set(self, tmp_path):
+        """run_audit downgrades 'Missing layer1' to WARNING if doc_patterns is set.
+        Empty-string layer1 stays CRITICAL."""
+        (tmp_path / "CLAUDE.md").write_text("# stub", encoding="utf-8")
+        # Case A: layer1 truly absent, patterns provided
+        cfg_a = {
+            "project_type": "standalone",
+            "doc_hierarchy": {},
+            "doc_patterns": ["CLAUDE.md"],
+        }
+        findings_a = run_audit(str(tmp_path), cfg_a)
+        schema_a = [f for f in findings_a if f.drift_type == DriftType.CONFIG_SCHEMA_WARNING
+                    and "layer1" in f.detail]
+        assert schema_a, "expected layer1-missing finding"
+        assert schema_a[0].severity == Severity.WARNING, "should be downgraded"
+
+        # Case B: layer1 is empty string (a different, harsher error)
+        cfg_b = {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": ""},
+            "doc_patterns": ["CLAUDE.md"],
+        }
+        findings_b = run_audit(str(tmp_path), cfg_b)
+        schema_b = [f for f in findings_b if f.drift_type == DriftType.CONFIG_SCHEMA_WARNING
+                    and "layer1" in f.detail]
+        assert schema_b
+        # Empty-string layer1 must stay CRITICAL
+        assert schema_b[0].severity == Severity.CRITICAL
+
+
+class TestFormatReport:
+    def test_project_name(self):
+        findings = [Finding(
+            drift_type=DriftType.PATH_ROT, severity=Severity.WARNING,
+            file="x.md", detail="missing", fix_suggestion="",
+        )]
+        report = format_report(findings, project_name="my-project")
+        assert "**Project**: my-project" in report

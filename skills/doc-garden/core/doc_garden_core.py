@@ -2,6 +2,7 @@
 
 All detection logic lives here. SKILL.md and hooks are thin consumers.
 """
+import importlib.util
 import json
 import os
 import re
@@ -25,6 +26,9 @@ class DriftType(str, Enum):
     CROSS_LAYER_CONTRADICTION = "CROSS_LAYER_CONTRADICTION"
     STRUCTURE_DRIFT = "STRUCTURE_DRIFT"
     STALENESS = "STALENESS"
+    CONTENT_DRIFT = "CONTENT_DRIFT"                 # cross-file semantic mismatch (custom checks)
+    CUSTOM_CHECK_ERROR = "CUSTOM_CHECK_ERROR"       # custom hook raised or returned bad data
+    CONFIG_SCHEMA_WARNING = "CONFIG_SCHEMA_WARNING" # .claude/doc-garden.json shape issue
 
 
 @dataclass
@@ -45,18 +49,70 @@ class Finding:
 DEFAULT_CONFIG = {
     "project_type": "standalone",
     "doc_hierarchy": {"layer1": "CLAUDE.md"},
+    "doc_patterns": ["CLAUDE.md", "AGENTS.md"],
+    "path_resolvers": [
+        {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": True},
+        {"prefix": "plans/", "root": "$HOME/.claude/plans", "optional": True},
+    ],
     "staleness_threshold_days": 14,
     "ignore_paths": ["node_modules/", ".git/", "dist/", ".venv/", "__pycache__/"],
 }
 
 
+def deep_merge(default: dict, user: dict) -> dict:
+    """Merge user config on top of default.
+
+    Rules:
+    - Scalar in user → override default
+    - List in user → complete replacement (no list concat; user's list is truth)
+    - Dict in user → recursive merge
+    - Key absent in user → fill from default
+    - `doc_hierarchy` respects explicit opt-out: if user wrote `doc_hierarchy: {}`,
+      we do NOT inject default layer1. This is the hook that lets a project say
+      "I don't want to declare a layer1, rely on doc_patterns discovery instead".
+
+    default and user are not mutated.
+    """
+    result = {}
+    all_keys = set(default.keys()) | set(user.keys())
+    for k in all_keys:
+        if k in user:
+            uv = user[k]
+            dv = default.get(k)
+            # Special-case: user writes doc_hierarchy: {} → keep it empty,
+            # do not backfill layer1. Explicit empty is opt-out.
+            if k == "doc_hierarchy" and isinstance(uv, dict) and not uv:
+                result[k] = {}
+            elif isinstance(uv, dict) and isinstance(dv, dict):
+                result[k] = deep_merge(dv, uv)
+            else:
+                # scalars AND lists: user value wins wholesale
+                result[k] = uv
+        else:
+            # Defensive copy for mutable default values
+            dv = default[k]
+            if isinstance(dv, dict):
+                result[k] = deep_merge(dv, {})
+            elif isinstance(dv, list):
+                result[k] = list(dv)
+            else:
+                result[k] = dv
+    return result
+
+
 def load_config(cwd: str) -> dict:
-    """Load .claude/doc-garden.json from project root, or return defaults."""
+    """Load .claude/doc-garden.json from project root, merged over DEFAULT_CONFIG.
+
+    New config fields (doc_patterns / path_resolvers / etc.) introduced after
+    the project's config was first generated will be auto-filled from defaults.
+    User's explicit values always win (see deep_merge).
+    """
     config_path = os.path.join(cwd, ".claude", "doc-garden.json")
     if os.path.exists(config_path):
         with open(config_path, encoding="utf-8") as f:
-            return json.load(f)
-    return dict(DEFAULT_CONFIG)
+            user = json.load(f)
+        return deep_merge(DEFAULT_CONFIG, user)
+    return deep_merge(DEFAULT_CONFIG, {})
 
 
 def save_config(cwd: str, config: dict):
@@ -88,30 +144,48 @@ def generate_draft_config(cwd: str) -> dict:
     This is a HEURISTIC — the output must be reviewed by the user before saving.
 
     Steps:
-    1. Detect project type + find all CLAUDE.md files
-    2. Extract all IPs from root CLAUDE.md (for environment domain discovery)
-    3. Attempt to group IPs by parsing markdown tables with environment headers
-    4. If table parsing fails, list discovered IPs for user to organize
+    1. Detect project type + discover root docs (CLAUDE.md / AGENTS.md)
+    2. Pick layer1: CLAUDE.md (preferred) → AGENTS.md → fallback "CLAUDE.md" + warning
+    3. Extract IPs from root doc (for environment domain discovery)
+    4. Attempt to group IPs by parsing markdown tables with environment headers
     5. Set sensible defaults for threshold and ignore paths
 
     Returns a dict with the draft config + a '_discovery' key containing
-    metadata for the agent to present to the user.
+    metadata for the agent to present to the user. `_discovery` (and any
+    `_`-prefix top-level keys) is stripped by save_config at persist time.
     """
-    project_type, claude_mds = detect_project_type(cwd)
+    project_type, doc_files = detect_project_type(cwd)
 
-    # Build layer2 from discovered CLAUDE.md files (exclude root)
-    layer2 = [f for f in claude_mds if f != "CLAUDE.md"]
+    # Pick layer1: prefer CLAUDE.md at root, fall back to AGENTS.md at root.
+    # If neither exists, keep DEFAULT "CLAUDE.md" so downstream code (which
+    # does os.path.join(cwd, layer1)) never sees None, and raise a warning.
+    layer1_warning = None
+    root_claude = "CLAUDE.md" in doc_files
+    root_agents = "AGENTS.md" in doc_files
+    if root_claude:
+        layer1 = "CLAUDE.md"
+    elif root_agents:
+        layer1 = "AGENTS.md"
+    else:
+        layer1 = "CLAUDE.md"
+        layer1_warning = (
+            "No CLAUDE.md or AGENTS.md found at project root — "
+            "layer1 defaulted to 'CLAUDE.md' but the file does not exist. "
+            "Create a root doc or the audit's structure/staleness checks will "
+            "report it as missing."
+        )
 
-    # Extract IPs from root CLAUDE.md for environment domain discovery
-    root_path = os.path.join(cwd, "CLAUDE.md")
+    # layer2 is all discovered docs except the root-level layer1 file
+    layer2 = [f for f in doc_files if f != layer1 and "/" in f]
+
+    # Extract IPs from root doc (whichever we picked for layer1)
+    root_path = os.path.join(cwd, layer1)
     discovered_ips = set()
     env_domains = {}
 
     if os.path.exists(root_path):
         root_ips, _ = _extract_ips_and_ports(root_path)
         discovered_ips = root_ips - {"127.0.0.1", "0.0.0.0"}
-
-        # Attempt table parsing: look for rows with environment keywords + IPs
         env_domains = _parse_env_table(root_path)
 
     # If table parsing found nothing but we have IPs, leave for user to organize
@@ -119,14 +193,14 @@ def generate_draft_config(cwd: str) -> dict:
         env_domains = {
             "_unorganized": {
                 "ips": sorted(discovered_ips),
-                "_note": "IPs discovered in root CLAUDE.md. Please organize into environment domains (e.g., test/prod/local)."
+                "_note": "IPs discovered in root doc. Please organize into environment domains (e.g., test/prod/local)."
             }
         }
 
     config = {
         "project_type": project_type,
         "doc_hierarchy": {
-            "layer1": "CLAUDE.md",
+            "layer1": layer1,
         },
         "staleness_threshold_days": 14,
         "ignore_paths": ["node_modules/", ".git/", "dist/", ".venv/", "__pycache__/", "target/"],
@@ -138,15 +212,21 @@ def generate_draft_config(cwd: str) -> dict:
     if env_domains:
         config["environment_domains"] = env_domains
 
-    # Discovery metadata for agent to present
-    config["_discovery"] = {
+    # Discovery metadata for agent to present (stripped by save_config)
+    discovery = {
         "detected_type": project_type,
-        "claude_md_count": len(claude_mds),
-        "claude_md_files": claude_mds,
+        "doc_count": len(doc_files),
+        "doc_files": doc_files,
+        "layer1_chosen": layer1,
+        "root_claude_md_present": root_claude,
+        "root_agents_md_present": root_agents,
         "discovered_ips": sorted(discovered_ips) if discovered_ips else [],
         "env_table_parsed": "_unorganized" not in env_domains if env_domains else False,
         "memory_dir_exists": os.path.isdir(resolve_memory_dir(cwd)),
     }
+    if layer1_warning:
+        discovery["warning"] = layer1_warning
+    config["_discovery"] = discovery
 
     return config
 
@@ -245,30 +325,138 @@ def resolve_memory_dir(cwd: str) -> str:
 IGNORE_DIRS = {"node_modules", ".git", "dist", ".venv", "__pycache__", ".next", "target"}
 
 
-def detect_project_type(cwd: str) -> tuple:
-    """Heuristic project type detection.
-    Returns (type_guess: str, claude_md_files: list[str]).
-    The result is a SUGGESTION — must be confirmed by user before use.
-    """
-    claude_mds = []
-    cwd_path = Path(cwd)
-    # Scan max depth 2 for CLAUDE.md
-    for depth in range(3):
-        if depth == 0:
-            candidates = [cwd_path / "CLAUDE.md"]
-        else:
-            candidates = list(cwd_path.glob("/".join(["*"] * depth) + "/CLAUDE.md"))
-        for p in candidates:
-            if p.exists() and not any(skip in str(p) for skip in IGNORE_DIRS):
-                rel = str(p.relative_to(cwd_path)).replace("\\", "/")
-                claude_mds.append(rel)
+def _normalize_ignore_dirs(ignore_paths) -> set:
+    """Normalize ignore_paths entries into bare dir names for comparison.
 
-    if len(claude_mds) > 2:
-        return "microservice", claude_mds
-    elif len(claude_mds) == 2:
-        return "monorepo", claude_mds
+    Accepts config `ignore_paths` (list like ["node_modules/", ".git/"]) and
+    strips trailing "/" or "\\" so we can match against `os.walk` dir names
+    directly. Union with the hard-coded IGNORE_DIRS to stay safe.
+    """
+    normalized = set(IGNORE_DIRS)
+    for p in (ignore_paths or []):
+        if isinstance(p, str):
+            bare = p.rstrip("/\\")
+            if bare:
+                normalized.add(bare)
+    return normalized
+
+
+def _walk_docs(cwd: str, patterns, ignore_dirs) -> list:
+    """Walk cwd, prune ignore_dirs in-place, return rel paths matching any pattern.
+
+    Uses os.walk so we can prune `dirnames` BEFORE descending — critical for
+    large repos (Path.rglob would walk everything first and filter later).
+    `patterns` is a list of filename patterns (basename match, e.g. "CLAUDE.md"
+    or "AGENTS.md"). Matching is exact basename, not glob — keep it simple.
+
+    Returns sorted list of paths relative to cwd, forward-slash-normalized.
+    """
+    matches = []
+    cwd_abs = os.path.abspath(cwd)
+    pattern_set = set(patterns or [])
+    for root, dirs, files in os.walk(cwd_abs):
+        # In-place prune: never descend into ignored dirs
+        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        for fname in files:
+            if fname in pattern_set:
+                full = os.path.join(root, fname)
+                try:
+                    rel = os.path.relpath(full, cwd_abs).replace("\\", "/")
+                except ValueError:
+                    continue
+                matches.append(rel)
+    # Stable sort: root docs first (fewest slashes), then depth, then alpha
+    matches.sort(key=lambda p: (p.count("/"), p))
+    return matches
+
+
+def collect_doc_files(cwd: str, config: dict) -> list:
+    """Return unified list of doc file paths (relative to cwd) to audit.
+
+    Union of:
+    1. Explicit hierarchy: config.doc_hierarchy.layer1/layer2/docs (if present)
+    2. Pattern discovery: all files in cwd matching config.doc_patterns,
+       pruning config.ignore_paths via os.walk
+
+    De-duped, stably sorted (root doc → module doc → deeper; alpha within tier).
+    Does NOT require files to actually exist on disk — existence is checked
+    by the caller (path_rot_check opens each one, missing ones are skipped).
+    """
+    out = []
+    seen = set()
+
+    hierarchy = config.get("doc_hierarchy", {}) or {}
+    for key in ("layer1",):
+        v = hierarchy.get(key)
+        if isinstance(v, str) and v.strip():
+            if v not in seen:
+                seen.add(v)
+                out.append(v)
+    for v in hierarchy.get("layer2", []) or []:
+        if isinstance(v, str) and v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    for v in hierarchy.get("docs", []) or []:
+        if isinstance(v, str) and v and v not in seen:
+            seen.add(v)
+            out.append(v)
+
+    patterns = config.get("doc_patterns") or []
+    if patterns:
+        ignore_dirs = _normalize_ignore_dirs(config.get("ignore_paths"))
+        for rel in _walk_docs(cwd, patterns, ignore_dirs):
+            if rel not in seen:
+                seen.add(rel)
+                out.append(rel)
+
+    # Final stable sort so output is deterministic regardless of insertion order
+    out.sort(key=lambda p: (p.count("/"), p))
+    return out
+
+
+def detect_project_type(cwd: str, config: dict = None) -> tuple:
+    """Heuristic project type detection.
+
+    Returns (type_guess: str, doc_files: list[str]).
+    The result is a SUGGESTION — must be confirmed by user before use.
+
+    Classification is based on the number of DISTINCT DIRECTORIES that
+    contain a doc, NOT the total doc count. This avoids misclassifying a
+    standalone project that happens to have both CLAUDE.md and AGENTS.md
+    at the root (which is a single-module project, even though doc count=2)
+    as a monorepo.
+
+    - 1 dir with docs (root only)         → standalone
+    - 2 dirs with docs (root + 1 module)  → monorepo
+    - >2 dirs with docs                   → microservice
+
+    When `config` is None (common during `generate_draft_config` before any
+    config exists), uses DEFAULT_CONFIG's doc_patterns so AGENTS-only projects
+    are also detected.
+    """
+    effective = config if config is not None else deep_merge(DEFAULT_CONFIG, {})
+    patterns = effective.get("doc_patterns") or ["CLAUDE.md"]
+    ignore_dirs = _normalize_ignore_dirs(effective.get("ignore_paths"))
+
+    # Only scan to depth 2 for type classification — deeper matches shouldn't
+    # inflate the microservice count
+    docs = []
+    doc_dirs = set()
+    for rel in _walk_docs(cwd, patterns, ignore_dirs):
+        depth = rel.count("/")
+        if depth <= 2:
+            docs.append(rel)
+            # Bucket by the immediate containing directory ("" = root).
+            # Two root-level docs (e.g. CLAUDE.md + AGENTS.md) share bucket "".
+            doc_dirs.add(rel.rsplit("/", 1)[0] if "/" in rel else "")
+
+    n_dirs = len(doc_dirs)
+    if n_dirs > 2:
+        return "microservice", docs
+    elif n_dirs == 2:
+        return "monorepo", docs
     else:
-        return "standalone", claude_mds
+        return "standalone", docs
 
 
 # ---------------------------------------------------------------------------
@@ -540,76 +728,180 @@ def _extract_paths_from_doc(filepath: str) -> list:
     return paths
 
 
+@dataclass
+class ResolveResult:
+    """Structured outcome of resolving a path reference against a project.
+
+    `status` trichotomy:
+      - "exists"  : one of the candidate locations was found on disk
+      - "missing" : none of the candidate locations exist (report PATH_ROT)
+      - "skip"    : a matching resolver is optional and its root is absent,
+                    so we silently skip this reference (don't report it)
+    """
+    status: str  # "exists" | "missing" | "skip"
+    candidates: list
+    reason: str = ""
+
+
+_ENV_PLACEHOLDER = re.compile(r"\$ENV:([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _substitute_resolver_root(root_template: str, cwd: str) -> Optional[str]:
+    """Substitute placeholders in a resolver root template.
+
+    Supported placeholders (longest match first to avoid `$HOME` eating
+    `$HOMEBREW_PREFIX`):
+
+    - `$CLAUDE_MEMORY_DIR` — per-project memory dir via `resolve_memory_dir(cwd)`
+    - `$HOME`              — user home directory via `os.path.expanduser("~")`
+    - `$ENV:VAR_NAME`      — any environment variable (extension point —
+                             a user who needs a new placeholder just sets
+                             the env var and writes `$ENV:MY_VAR` in config)
+    - leading `~`          — also expanded via `os.path.expanduser`
+
+    If a `$ENV:VAR` references an unset environment variable, substitution
+    returns None so the caller can report the resolver as unusable. Missing
+    `$HOME` / `$CLAUDE_MEMORY_DIR` don't fail (both have deterministic
+    fallbacks); `$ENV:*` is the opt-in failure channel.
+    """
+    out = root_template
+
+    # $ENV:VAR — handle first so an env var value containing literal "$HOME"
+    # doesn't get doubly-substituted by the shortcut expansions below.
+    def _env_sub(match):
+        var = match.group(1)
+        val = os.environ.get(var)
+        if val is None:
+            # Sentinel: let caller detect unresolved and treat as missing/skip
+            return "\x00UNRESOLVED\x00"
+        return val
+
+    out = _ENV_PLACEHOLDER.sub(_env_sub, out)
+    if "\x00UNRESOLVED\x00" in out:
+        return None
+
+    if "$CLAUDE_MEMORY_DIR" in out:
+        out = out.replace("$CLAUDE_MEMORY_DIR", resolve_memory_dir(cwd))
+    if "$HOME" in out:
+        out = out.replace("$HOME", os.path.expanduser("~"))
+    # Also expand leading ~ for convenience
+    out = os.path.expanduser(out)
+    return out
+
+
+def resolve_reference(path_str: str, doc_abs: str, cwd: str, config: dict) -> ResolveResult:
+    """Resolve a path reference extracted from a doc against the project.
+
+    Flow:
+      1. Try each configured `path_resolvers` in order. If the reference's
+         prefix matches:
+           - substitute $HOME / $CLAUDE_MEMORY_DIR in the resolver root
+           - if the root directory doesn't exist and `optional: true`,
+             return status="skip" so we don't noise the report
+           - if the root exists, build the candidate path and return
+             status="exists" or "missing"
+           - if the root doesn't exist and resolver is required (optional=false
+             or absent), fall through to generic resolution (treat as missing)
+      2. No resolver matched → fall back to existing three-way resolution:
+         relative to doc location, project root, and (for module docs) glob
+         search within the module root.
+    """
+    candidates = []
+    ignore = config.get("ignore_paths", DEFAULT_CONFIG["ignore_paths"])
+    if any(ig in path_str for ig in ignore):
+        return ResolveResult(status="skip", candidates=[], reason="matches ignore_paths")
+
+    resolvers = config.get("path_resolvers") or []
+    for r in resolvers:
+        if not isinstance(r, dict):
+            continue
+        prefix = r.get("prefix", "")
+        root_tpl = r.get("root", "")
+        optional = bool(r.get("optional", False))
+        if not prefix or not root_tpl:
+            continue
+        if not path_str.startswith(prefix):
+            continue
+
+        root_abs = _substitute_resolver_root(root_tpl, cwd)
+        if root_abs is None:
+            if optional:
+                return ResolveResult(
+                    status="skip", candidates=[],
+                    reason=f"optional resolver root {root_tpl!r} could not be resolved",
+                )
+            # Required resolver with unresolvable root: treat as missing
+            return ResolveResult(
+                status="missing", candidates=[],
+                reason=f"required resolver root {root_tpl!r} could not be resolved",
+            )
+
+        if not os.path.isdir(root_abs):
+            if optional:
+                return ResolveResult(
+                    status="skip", candidates=[root_abs],
+                    reason=f"optional resolver root {root_abs!r} does not exist",
+                )
+            # Required resolver, root missing — still try to resolve
+            # (caller may care about the exact candidate path for debugging)
+            cand = os.path.join(root_abs, path_str[len(prefix):])
+            return ResolveResult(status="missing", candidates=[cand],
+                                 reason="required resolver root does not exist")
+
+        cand = os.path.join(root_abs, path_str[len(prefix):])
+        status = "exists" if os.path.exists(cand) else "missing"
+        return ResolveResult(status=status, candidates=[cand])
+
+    # No resolver prefix matched — fall back to generic three-way resolution
+    doc_dir = os.path.dirname(doc_abs)
+    candidates = [
+        os.path.join(doc_dir, path_str),
+        os.path.join(cwd, path_str),
+    ]
+    if doc_dir != cwd:
+        candidates.append(os.path.join(doc_dir, path_str))  # redundant, kept for clarity
+
+    # For nested module paths: glob search within module root (limited depth)
+    if doc_dir != cwd and "/" in path_str:
+        leaf = path_str.split("/")[-1]
+        module_root = doc_dir
+        try:
+            for root_dir, dirs, files in os.walk(module_root):
+                depth = root_dir.replace(module_root, "").count(os.sep)
+                if depth > 4:
+                    dirs.clear()
+                    continue
+                if leaf in files or leaf in dirs:
+                    candidates.append(os.path.join(root_dir, leaf))
+        except OSError:
+            pass
+
+    if any(os.path.exists(c) for c in candidates):
+        return ResolveResult(status="exists", candidates=candidates)
+    return ResolveResult(status="missing", candidates=candidates)
+
+
 def path_rot_check(cwd: str, config: dict) -> list:
-    """Check if file paths referenced in CLAUDE.md files actually exist.
-    Only checks paths that look like local repo references (not server paths,
-    branch names, timezone strings, etc.).
-    Returns list of Finding objects.
+    """Check if file paths referenced in doc files actually exist.
+
+    Scans every doc discovered by `collect_doc_files` (hierarchy ∪ doc_patterns).
+    For each extracted path reference, delegates resolution to
+    `resolve_reference` which honors config.path_resolvers (memory/, plans/,
+    etc.) with optional-root skip semantics.
+
+    Only reports PATH_ROT for genuinely missing references; `skip` status
+    (e.g. optional resolver root absent) produces no finding.
     """
     findings = []
-    ignore = config.get("ignore_paths", DEFAULT_CONFIG["ignore_paths"])
 
-    # Collect all CLAUDE.md files to scan
-    doc_files = []
-    hierarchy = config.get("doc_hierarchy", {})
-    layer1 = hierarchy.get("layer1")
-    if layer1:
-        doc_files.append(layer1)
-    for f in hierarchy.get("layer2", []):
-        doc_files.append(f)
-    for f in hierarchy.get("docs", []):
-        doc_files.append(f)
-
-    for doc_rel in doc_files:
+    for doc_rel in collect_doc_files(cwd, config):
         doc_abs = os.path.join(cwd, doc_rel)
         if not os.path.exists(doc_abs):
             continue
 
-        # For module CLAUDE.md, also resolve relative to module root
-        doc_dir = os.path.dirname(doc_abs)
-        module_root = doc_dir  # e.g., auto-submit-api/
-
         for path_str, line_no in _extract_paths_from_doc(doc_abs):
-            # Skip ignored paths
-            if any(ig in path_str for ig in ignore):
-                continue
-
-            # Try resolving relative to: doc location, module root, project root
-            candidates = [
-                os.path.join(doc_dir, path_str),
-                os.path.join(cwd, path_str),
-            ]
-            # For module docs: also try relative to module root
-            if doc_dir != cwd:
-                candidates.append(os.path.join(module_root, path_str))
-
-            # Claude Code runtime-resolved prefixes: memory/ lives in user-level
-            # project memory dir, plans/ lives in ~/.claude/plans/
-            if path_str.startswith("memory/"):
-                candidates.append(
-                    os.path.join(resolve_memory_dir(cwd), path_str[len("memory/"):])
-                )
-            if path_str.startswith("plans/"):
-                candidates.append(
-                    os.path.expanduser(f"~/.claude/plans/{path_str[len('plans/'):]}")
-                )
-
-            # For nested module paths (e.g., dw-modules-vstory/src/...):
-            # try glob search within module root
-            if doc_dir != cwd and "/" in path_str:
-                leaf = path_str.split("/")[-1]
-                for root_dir, dirs, files in os.walk(module_root):
-                    # Limit depth to avoid deep scanning
-                    depth = root_dir.replace(module_root, "").count(os.sep)
-                    if depth > 4:
-                        dirs.clear()
-                        continue
-                    if leaf in files or leaf in dirs:
-                        candidates.append(os.path.join(root_dir, leaf))
-
-            exists = any(os.path.exists(c) for c in candidates)
-
-            if not exists:
+            result = resolve_reference(path_str, doc_abs, cwd, config)
+            if result.status == "missing":
                 findings.append(Finding(
                     drift_type=DriftType.PATH_ROT,
                     severity=Severity.WARNING,
@@ -618,6 +910,7 @@ def path_rot_check(cwd: str, config: dict) -> list:
                     fix_suggestion="Remove reference or update to correct path",
                     auto_fixable=False,
                 ))
+            # exists / skip → no finding
 
     return findings
 
@@ -1000,6 +1293,28 @@ def run_audit(cwd: str, config: dict = None) -> list:
 
     findings = []
 
+    # Schema check first: surface bad config as findings (not exceptions).
+    # Missing layer1 gets downgraded to WARNING when doc_patterns is set
+    # (collect_doc_files can still discover docs via pattern matching).
+    # Other schema errors — empty-string layer1, wrong types, etc. — stay
+    # CRITICAL because they're actively broken, not merely under-specified.
+    schema_errors = validate_config(config)
+    if schema_errors:
+        has_doc_patterns = bool(config.get("doc_patterns"))
+        for err in schema_errors:
+            is_missing_layer1 = err == "Missing required field: doc_hierarchy.layer1"
+            severity = (Severity.WARNING
+                        if (is_missing_layer1 and has_doc_patterns)
+                        else Severity.CRITICAL)
+            findings.append(Finding(
+                drift_type=DriftType.CONFIG_SCHEMA_WARNING,
+                severity=severity,
+                file=".claude/doc-garden.json",
+                detail=f"[config schema] {err}",
+                fix_suggestion="Fix .claude/doc-garden.json to match the documented schema",
+                auto_fixable=False,
+            ))
+
     # Memory index: always run
     findings += memory_index_check(cwd)
 
@@ -1020,6 +1335,100 @@ def run_audit(cwd: str, config: dict = None) -> list:
 
     # Staleness: always run
     findings += staleness_check(cwd, config)
+
+    # Custom project-specific checks: load .claude/doc-garden-checks.py if present.
+    # Exceptions and malformed return values are surfaced as CUSTOM_CHECK_ERROR
+    # findings instead of crashing the whole audit.
+    findings += _run_custom_checks(cwd, config)
+
+    return findings
+
+
+def _run_custom_checks(cwd: str, config: dict) -> list:
+    """Load and execute .claude/doc-garden-checks.py custom hook.
+
+    Contract (see examples/doc-garden-checks.example.py):
+      - Hook file exposes `run_custom_checks(cwd, config) -> list[Finding]`
+      - Hook MUST import Finding from `core.doc_garden_core` (not a sys.path hack).
+        A different import path produces a different class object, and
+        `isinstance(item, Finding)` here would reject the foreign Finding.
+
+    Failure modes:
+      - Hook missing → silently skip
+      - Hook raises → one CUSTOM_CHECK_ERROR finding
+      - Hook returns non-list → one CUSTOM_CHECK_ERROR finding
+      - Hook returns list with non-Finding items → a CUSTOM_CHECK_ERROR per bad item;
+        valid items are still kept
+    """
+    findings = []
+    custom_path = Path(cwd) / ".claude" / "doc-garden-checks.py"
+    if not custom_path.exists():
+        return findings
+
+    rel_path = str(custom_path.relative_to(cwd)).replace("\\", "/")
+    try:
+        spec = importlib.util.spec_from_file_location("dg_custom_checks", custom_path)
+        if spec is None or spec.loader is None:
+            findings.append(Finding(
+                drift_type=DriftType.CUSTOM_CHECK_ERROR,
+                severity=Severity.WARNING,
+                file=rel_path,
+                detail="Failed to build import spec for custom checks file",
+                fix_suggestion="Verify the file is readable and contains valid Python",
+            ))
+            return findings
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:
+        findings.append(Finding(
+            drift_type=DriftType.CUSTOM_CHECK_ERROR,
+            severity=Severity.WARNING,
+            file=rel_path,
+            detail=f"Custom checks module failed to load: {type(e).__name__}: {e}",
+            fix_suggestion="Fix syntax/import errors in the custom checks script or remove it",
+        ))
+        return findings
+
+    if not hasattr(mod, "run_custom_checks"):
+        # Not an error — the file exists but opts out of audit integration
+        return findings
+
+    try:
+        result = mod.run_custom_checks(cwd, config)
+    except Exception as e:
+        findings.append(Finding(
+            drift_type=DriftType.CUSTOM_CHECK_ERROR,
+            severity=Severity.WARNING,
+            file=rel_path,
+            detail=f"run_custom_checks raised {type(e).__name__}: {e}",
+            fix_suggestion="Fix the failing check or return an empty list on error",
+        ))
+        return findings
+
+    if not isinstance(result, list):
+        findings.append(Finding(
+            drift_type=DriftType.CUSTOM_CHECK_ERROR,
+            severity=Severity.WARNING,
+            file=rel_path,
+            detail=f"run_custom_checks must return list[Finding], got {type(result).__name__}",
+            fix_suggestion="Return an empty list if there are no findings",
+        ))
+        return findings
+
+    for i, item in enumerate(result):
+        if isinstance(item, Finding):
+            findings.append(item)
+        else:
+            findings.append(Finding(
+                drift_type=DriftType.CUSTOM_CHECK_ERROR,
+                severity=Severity.WARNING,
+                file=rel_path,
+                detail=(f"run_custom_checks[{i}] is not a Finding instance "
+                        f"(got {type(item).__name__}). Custom checks MUST "
+                        f"`from core.doc_garden_core import Finding` — a "
+                        f"different import path produces a different class."),
+                fix_suggestion="Ensure hook imports Finding from core.doc_garden_core",
+            ))
 
     return findings
 
@@ -1421,7 +1830,13 @@ def apply_auto_fix(cwd: str, findings: list) -> list:
 # ---------------------------------------------------------------------------
 
 def validate_config(config: dict) -> list:
-    """Validate a config dict. Returns list of error strings. Empty = valid."""
+    """Validate a config dict. Returns list of error strings. Empty = valid.
+
+    Note: run_audit() translates these strings into CONFIG_SCHEMA_WARNING
+    findings. The exact string "Missing required field: doc_hierarchy.layer1"
+    is used as a downgrade sentinel (WARNING vs CRITICAL when doc_patterns is
+    set) — do not reword it without updating run_audit().
+    """
     errors = []
 
     internal_keys = [k for k in config if k.startswith("_")]
@@ -1432,12 +1847,45 @@ def validate_config(config: dict) -> list:
         errors.append("Missing required field: project_type")
     if "doc_hierarchy" not in config:
         errors.append("Missing required field: doc_hierarchy")
-    elif "layer1" not in config.get("doc_hierarchy", {}):
-        errors.append("Missing required field: doc_hierarchy.layer1")
+    else:
+        hierarchy = config.get("doc_hierarchy", {})
+        if "layer1" not in hierarchy:
+            errors.append("Missing required field: doc_hierarchy.layer1")
+        else:
+            # Empty-string / non-string layer1 is worse than missing: it's an
+            # actively broken value and must stay CRITICAL (not downgraded).
+            l1 = hierarchy.get("layer1")
+            if not isinstance(l1, str) or not l1.strip():
+                errors.append("doc_hierarchy.layer1 must be a non-empty string")
 
     env = config.get("environment_domains", {})
     if "_unorganized" in env:
         errors.append("environment_domains still has '_unorganized' — IPs need to be organized into named domains")
+
+    # doc_patterns: optional, but if present must be non-empty list of strings.
+    # Guard: all([]) is True, so explicit `not patterns` check is required.
+    patterns = config.get("doc_patterns")
+    if patterns is not None:
+        if (not isinstance(patterns, list)
+                or not patterns
+                or not all(isinstance(p, str) and p for p in patterns)):
+            errors.append("doc_patterns must be a non-empty list of non-empty strings")
+
+    # path_resolvers: optional; each entry needs prefix + root as strings
+    resolvers = config.get("path_resolvers")
+    if resolvers is not None:
+        if not isinstance(resolvers, list):
+            errors.append("path_resolvers must be a list")
+        else:
+            for i, r in enumerate(resolvers):
+                if not isinstance(r, dict):
+                    errors.append(f"path_resolvers[{i}] must be a dict")
+                    continue
+                if not isinstance(r.get("prefix"), str) or not r.get("prefix"):
+                    errors.append(f"path_resolvers[{i}] missing 'prefix' (non-empty string)")
+                if not isinstance(r.get("root"), str) or not r.get("root"):
+                    errors.append(f"path_resolvers[{i}] missing 'root' (non-empty string)")
+                # optional defaults to False; no validation needed if absent
 
     return errors
 
