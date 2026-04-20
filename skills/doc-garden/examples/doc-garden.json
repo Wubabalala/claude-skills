@@ -14,8 +14,7 @@
   },
   "doc_patterns": ["CLAUDE.md", "AGENTS.md"],
   "path_resolvers": [
-    {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": true},
-    {"prefix": "plans/",  "root": "$HOME/.claude/plans", "optional": true}
+    {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": true}
   ],
   "environment_domains": {
     "测试": {

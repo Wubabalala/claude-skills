@@ -55,7 +55,12 @@ DEFAULT_CONFIG = {
     "doc_patterns": ["CLAUDE.md", "AGENTS.md"],
     "path_resolvers": [
         {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": True},
-        {"prefix": "plans/", "root": "$HOME/.claude/plans", "optional": True},
+        # NOTE: `plans/` resolver used to be a default here, but field tests
+        # on 2 real projects showed it hijacks project-local `plans/X.md`
+        # references (which usually mean `docs/plans/X.md`) and redirects
+        # them to `$HOME/.claude/plans`. Users relying on the claude-code
+        # global plans directory can add it back explicitly:
+        #   {"prefix": "plans/", "root": "$HOME/.claude/plans", "optional": True}
     ],
     "staleness_threshold_days": 14,
     "ignore_paths": ["node_modules/", ".git/", "dist/", ".venv/", "__pycache__/"],
@@ -94,8 +99,13 @@ DEFAULT_CONFIG = {
     # filenames as identifiers or quick references rather than as authoritative
     # "this file exists here" claims; projects with strong index/reference
     # doc conventions use the full path (`src/config/aiModes.js`) in those
-    # cases. Default False for backward compatibility — opt in per project.
-    "skip_bare_filenames": False,
+    # cases.
+    #
+    # Default TRUE based on field evidence: 2 real projects (vectorDraft,
+    # v-story) both had ~50 bare-filename false positives at audit time;
+    # enabling this flag was a hard dependency for reaching 0-drift. Projects
+    # that want strict bare-filename checking must explicitly set False.
+    "skip_bare_filenames": True,
     # Fact patterns for FACT_VALUE_CONFLICT: the same fact key appearing in
     # multiple docs must agree on its value. Each entry:
     #   name:         human-readable label, used in findings
@@ -1032,8 +1042,9 @@ def path_rot_check(cwd: str, config: dict) -> list:
 
     Scans every doc discovered by `collect_doc_files` (hierarchy ∪ doc_patterns).
     For each extracted path reference, delegates resolution to
-    `resolve_reference` which honors config.path_resolvers (memory/, plans/,
-    etc.) with optional-root skip semantics.
+    `resolve_reference` which honors config.path_resolvers (memory/ by
+    default; add plans/ or others explicitly) with optional-root skip
+    semantics.
 
     Only reports PATH_ROT for genuinely missing references; `skip` status
     (e.g. optional resolver root absent) produces no finding.

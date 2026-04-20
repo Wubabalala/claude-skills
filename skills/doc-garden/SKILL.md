@@ -178,7 +178,10 @@ Run applicable checks from `references/drift-taxonomy.md`:
      fenced code blocks)
    - Delegates to `resolve_reference(path_str, doc_abs, cwd, config)` which:
      - Matches configured `path_resolvers` by prefix (default: `memory/` →
-       `$CLAUDE_MEMORY_DIR`, `plans/` → `$HOME/.claude/plans`, both `optional`)
+       `$CLAUDE_MEMORY_DIR`, `optional`). `plans/` is NOT a default resolver —
+       too many projects use `plans/` for their own `docs/plans/` layout and
+       the resolver would hijack those refs. Users who rely on claude-code
+       global plans can add it explicitly.
      - `optional: true` resolver whose root doesn't exist → status `skip`
        (no finding; intentional for cross-environment authoring)
      - Matched resolver whose root exists → builds candidate and checks

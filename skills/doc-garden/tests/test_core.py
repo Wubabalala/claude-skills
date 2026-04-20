@@ -340,6 +340,34 @@ class TestPathRotCheck:
         rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
         assert not rot_paths, rot_paths
 
+    def test_default_behaviour_skips_bare_filenames_and_no_plans_resolver(self, tmp_path):
+        """DEFAULT_CONFIG changes: skip_bare_filenames is now True by default,
+        and `plans/` is no longer a default path_resolver (would hijack
+        project-local plans/ references).
+
+        Regression guard for the 2026-04-21 backport."""
+        # Bare filename that doesn't exist: should NOT be flagged (default True)
+        # plans/ ref: should fall back to doc-location resolution (no default
+        # resolver to hijack it)
+        (tmp_path / "CLAUDE.md").write_text(
+            "Bare: `aiModes.js`\n"
+            "Plan: `plans/my_design.md`\n",
+            encoding="utf-8",
+        )
+        # Put the plan where doc-location fallback would find it
+        (tmp_path / "plans").mkdir()
+        (tmp_path / "plans" / "my_design.md").write_text("", encoding="utf-8")
+
+        # Minimal config — rely on DEFAULT_CONFIG for skip_bare_filenames
+        # and path_resolvers
+        config = load_config(str(tmp_path))
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        # Bare filename skipped
+        assert not any("aiModes.js" in d for d in rot_paths), rot_paths
+        # Plan resolves via doc-location (no hijacking by $HOME/.claude/plans resolver)
+        assert not any("my_design.md" in d for d in rot_paths), rot_paths
+
     def test_skip_bare_filenames_opt_in(self, tmp_path):
         """With skip_bare_filenames=True, paths without `/` are not PATH_ROT
         even when the file doesn't exist. Paths WITH `/` still checked."""

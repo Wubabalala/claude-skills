@@ -16,8 +16,7 @@
   },
   "doc_patterns": ["CLAUDE.md", "AGENTS.md"],
   "path_resolvers": [
-    {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": true},
-    {"prefix": "plans/",  "root": "$HOME/.claude/plans", "optional": true}
+    {"prefix": "memory/", "root": "$CLAUDE_MEMORY_DIR", "optional": true}
   ],
   "environment_domains": {
     "环境名": {
@@ -31,7 +30,7 @@
   "ignore_url_prefixes": ["/api/", "/admin/"],
   "ignore_path_patterns": ["*your_service*", ".cursor/*"],
   "generic_path_fallbacks": ["frontend/src/", "backend/src/main/java/com/example/"],
-  "skip_bare_filenames": false,
+  "skip_bare_filenames": true,
   "fact_patterns": [
     {
       "name": "file_line_count",
@@ -188,20 +187,23 @@ Docs outside `auto-submit-web/` ignore that scoped entry entirely.
 
 ### `skip_bare_filenames`
 
-Boolean flag (default `false`). When `true`, paths that contain no `/`
+Boolean flag (**default `true`**). When `true`, paths that contain no `/`
 separator at all — "bare filenames" like `PaymentService.java`,
 `aiModes.js`, `deploy.sh` — are skipped during PATH_ROT checking.
 
-**Why opt-in**: bare filenames are ambiguous. They might be:
+**Why default true**: bare filenames are ambiguous. They might be:
 
 - Authoritative references ("this file exists at this name somewhere")
 - Identifier-style mentions ("the `aiModes.js` entry point" — prose naming, not claim)
 - Typo risk surfaces (wrong basename → silently wrong)
 
-Projects whose docs use **full paths** (`src/config/aiModes.js`) for
-authoritative references should enable this to silence identifier-style
-mentions. Projects using **bare filenames** as lookups gain typo
-protection by leaving it off.
+Field testing on 2 real projects (vectorDraft, v-story) found bare
+filenames were overwhelmingly identifier-style mentions, and strict
+checking produced ~50 false positives per project. Both needed this
+enabled to reach 0-drift — making `true` the better default.
+
+Projects that use bare filenames as **authoritative lookups** (strong
+index-doc convention, want typo protection) can explicitly set `false`.
 
 Paths with any `/` are unaffected — `utils/SafeCollections.java` is
 still checked against the filesystem.
