@@ -272,6 +272,23 @@ class TestPathRotCheck:
         assert not any("agents-radar" in d for d in rot_paths), rot_paths
         assert not any("my-tool" in d for d in rot_paths), rot_paths
 
+    def test_path_rot_skips_windows_bash_drive_letter_paths(self, tmp_path):
+        """Git-Bash / MSYS `/c/Users/...` / `/d/work/...` paths reference the
+        author's local machine, not repo files — should not be flagged."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "SSH key: `/d/work/sshKey`\n"
+            "Home: `/c/Users/hyc/.claude/plans/foo.md`\n"
+            "Real file: `src/main.py`\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.py").write_text("", encoding="utf-8")
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("/d/work" in d for d in rot_paths), rot_paths
+        assert not any("/c/Users" in d for d in rot_paths), rot_paths
+
     def test_path_rot_still_catches_real_two_segment_paths(self, tmp_path):
         """Regression guard: 2-segment paths WITH extension must still be checked."""
         (tmp_path / "CLAUDE.md").write_text(

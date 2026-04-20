@@ -696,6 +696,12 @@ _NOT_A_LOCAL_PATH = re.compile(r"""
     # Example: `C:/Users/hyc/.claude/plans/foo.md`.
     ^[A-Z]:/ |
 
+    # Git-Bash / MSYS / Cygwin Windows drive-letter paths. On Windows,
+    # bash rewrites `C:\...` to `/c/...`; docs that show command examples
+    # often paste this form literally. Single-letter drive prefix is the
+    # distinguishing feature. Example: `/d/work/sshKey`, `/c/Users/hyc/...`.
+    ^/[a-zA-Z]/ |
+
     # Glob / wildcard patterns — intent is "files matching this shape",
     # not a specific file. Example: `src/**/*.py`, `tests/**/test_*.py`.
     /\*\*/ |
