@@ -30,6 +30,7 @@ class DriftType(str, Enum):
     CUSTOM_CHECK_ERROR = "CUSTOM_CHECK_ERROR"       # custom hook raised or returned bad data
     CONFIG_SCHEMA_WARNING = "CONFIG_SCHEMA_WARNING" # .claude/doc-garden.json shape issue
     FACT_VALUE_CONFLICT = "FACT_VALUE_CONFLICT"     # same fact key has different values across docs
+    ENTITY_COVERAGE = "ENTITY_COVERAGE"             # code entity not mentioned in any reference doc
 
 
 @dataclass
@@ -82,6 +83,27 @@ DEFAULT_CONFIG = {
     # cross-doc divergence triggers a finding. Typical use: file line counts
     # summarized in multiple CLAUDE.md pointers, version pins, port numbers.
     "fact_patterns": [],
+    # Entity patterns for ENTITY_COVERAGE: source-side code entities (Java
+    # Controllers, FastAPI routes, Vue page components, etc.) that MUST
+    # appear in at least one reference doc. Each entry:
+    #   name:            human-readable label used in findings
+    #   source_glob:     repo-relative glob for source files (passed to
+    #                    glob.glob with recursive=True); basenames of
+    #                    matched files are fed to `entity_pattern`
+    #   entity_pattern:  regex applied per basename; **group 1** is the
+    #                    entity name (e.g. r'^(\w+Controller)\.java$'
+    #                    captures `UserController`)
+    #   ref_scope:       repo-relative glob for reference docs; concatenated
+    #                    text of all matches is searched for the entity
+    #                    name as a plain substring
+    # Entities not found in ref_scope → finding (unless policy classifies
+    # them). The policy file (see entity_policy_file) supports IGNORED
+    # (silent) and KNOWN_UNDOCUMENTED (silent in v1) classifications.
+    "entity_patterns": [],
+    # Path (repo-relative) to the entity coverage policy file. Missing file
+    # is fine; all entities default to MISSING_ANCHOR behaviour.
+    # Line format: "LEVEL: EntityName  # reason"
+    "entity_policy_file": ".claude/doc-garden-entity-policy.txt",
 }
 
 
@@ -1210,6 +1232,153 @@ def fact_value_conflict_check(cwd: str, config: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Entity coverage (reverse-coverage check: code entity missing from refs)
+# ---------------------------------------------------------------------------
+
+_ENTITY_POLICY_LINE = re.compile(
+    r"^(IGNORED|KNOWN_UNDOCUMENTED):\s*(\w+)\s*(?:#\s*(.*))?$"
+)
+
+
+def _load_entity_policy(policy_abs: str) -> dict:
+    """Parse `.claude/doc-garden-entity-policy.txt` into {name: (level, reason)}.
+
+    Missing file → empty dict. Malformed lines are silently skipped (a
+    classification typo should not noise up the report; validate manually).
+    """
+    policy: dict = {}
+    if not policy_abs or not os.path.isfile(policy_abs):
+        return policy
+    try:
+        with open(policy_abs, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                m = _ENTITY_POLICY_LINE.match(line)
+                if m:
+                    level, name, reason = m.group(1), m.group(2), (m.group(3) or "").strip()
+                    policy[name] = (level, reason)
+    except OSError:
+        pass
+    return policy
+
+
+def entity_coverage_check(cwd: str, config: dict) -> list:
+    """Detect source-code entities absent from every configured reference doc.
+
+    For each entity_pattern:
+      1. Glob source files under cwd via `source_glob`
+      2. Apply `entity_pattern` regex to each basename; group 1 = entity name
+      3. Concatenate every doc matching `ref_scope` into one text blob
+      4. For each entity: if its name appears as a substring in the blob →
+         covered; otherwise check policy:
+           - IGNORED → silent (not a finding)
+           - KNOWN_UNDOCUMENTED → silent in v1 (future verbose mode)
+           - (absent from policy) → emit ENTITY_COVERAGE finding
+    """
+    import glob as _glob
+
+    findings = []
+    entity_patterns = config.get("entity_patterns") or []
+    if not entity_patterns:
+        return findings
+
+    cwd_abs = os.path.abspath(cwd)
+    policy_rel = config.get("entity_policy_file") or ".claude/doc-garden-entity-policy.txt"
+    policy_abs = os.path.join(cwd_abs, policy_rel)
+    policy = _load_entity_policy(policy_abs)
+
+    for ep in entity_patterns:
+        if not isinstance(ep, dict):
+            continue
+        name = ep.get("name")
+        source_glob = ep.get("source_glob")
+        entity_pattern_src = ep.get("entity_pattern")
+        ref_scope = ep.get("ref_scope")
+        if not (isinstance(name, str) and name
+                and isinstance(source_glob, str) and source_glob
+                and isinstance(entity_pattern_src, str) and entity_pattern_src
+                and isinstance(ref_scope, str) and ref_scope):
+            continue
+        try:
+            entity_regex = re.compile(entity_pattern_src)
+        except re.error:
+            continue
+
+        # Collect entities from source filenames.
+        source_abs = os.path.join(cwd_abs, source_glob)
+        entities: set = set()
+        for src_path in _glob.glob(source_abs, recursive=True):
+            basename = os.path.basename(src_path)
+            m = entity_regex.search(basename)
+            if not m:
+                continue
+            try:
+                entity_name = m.group(1)
+            except IndexError:
+                continue
+            if entity_name:
+                entities.add(entity_name)
+
+        if not entities:
+            continue
+
+        # Concatenate ref_scope text.
+        ref_abs = os.path.join(cwd_abs, ref_scope)
+        ref_paths = _glob.glob(ref_abs, recursive=True)
+        ref_text_parts: list = []
+        for ref_path in ref_paths:
+            try:
+                with open(ref_path, encoding="utf-8", errors="ignore") as f:
+                    ref_text_parts.append(f.read())
+            except OSError:
+                continue
+        ref_text = "\n".join(ref_text_parts)
+
+        # If ref_scope resolved to no files at all, every entity would be a
+        # "missing" — that's probably a misconfiguration, not drift. Emit a
+        # single schema-style warning rather than flooding the report.
+        if not ref_paths:
+            findings.append(Finding(
+                drift_type=DriftType.ENTITY_COVERAGE,
+                severity=Severity.INFO,
+                file=policy_rel if os.path.isfile(policy_abs) else source_glob,
+                detail=(
+                    f"[{name}] ref_scope glob '{ref_scope}' matched 0 files; "
+                    "entity coverage check skipped. Verify the glob is correct."
+                ),
+                fix_suggestion=f"Adjust entity_patterns[].ref_scope or create the reference docs.",
+                auto_fixable=False,
+            ))
+            continue
+
+        for entity in sorted(entities):
+            if entity in ref_text:
+                continue
+            if entity in policy:
+                level, _reason = policy[entity]
+                if level in ("IGNORED", "KNOWN_UNDOCUMENTED"):
+                    continue  # silent in v1
+            findings.append(Finding(
+                drift_type=DriftType.ENTITY_COVERAGE,
+                severity=Severity.WARNING,
+                file=source_glob,
+                detail=(
+                    f"[{name}] entity '{entity}' not found in any ref matching "
+                    f"'{ref_scope}'"
+                ),
+                fix_suggestion=(
+                    f"Add '{entity}' to a relevant reference doc, or classify "
+                    f"in {policy_rel} as IGNORED / KNOWN_UNDOCUMENTED with a reason."
+                ),
+                auto_fixable=False,
+            ))
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Cross-Layer Contradiction + Config Value Drift
 # ---------------------------------------------------------------------------
 
@@ -1530,6 +1699,10 @@ def run_audit(cwd: str, config: dict = None) -> list:
     # Fact value conflict: only if fact_patterns defined
     if config.get("fact_patterns"):
         findings += fact_value_conflict_check(cwd, config)
+
+    # Entity coverage: only if entity_patterns defined
+    if config.get("entity_patterns"):
+        findings += entity_coverage_check(cwd, config)
 
     # Custom project-specific checks: load .claude/doc-garden-checks.py if present.
     # Exceptions and malformed return values are surfaced as CUSTOM_CHECK_ERROR
@@ -2105,6 +2278,29 @@ def validate_config(config: dict) -> list:
                 for g in ("key_group", "value_group"):
                     if not isinstance(fp.get(g), int) or fp.get(g) < 1:
                         errors.append(f"fact_patterns[{i}] '{g}' must be a positive int (1-based regex group index)")
+
+    # entity_patterns: optional; each entry needs name + source_glob + entity_pattern + ref_scope
+    entity_patterns = config.get("entity_patterns")
+    if entity_patterns is not None:
+        if not isinstance(entity_patterns, list):
+            errors.append("entity_patterns must be a list")
+        else:
+            for i, ep in enumerate(entity_patterns):
+                if not isinstance(ep, dict):
+                    errors.append(f"entity_patterns[{i}] must be a dict")
+                    continue
+                for key in ("name", "source_glob", "ref_scope"):
+                    v = ep.get(key)
+                    if not isinstance(v, str) or not v:
+                        errors.append(f"entity_patterns[{i}] missing '{key}' (non-empty string)")
+                ep_regex = ep.get("entity_pattern")
+                if not isinstance(ep_regex, str) or not ep_regex:
+                    errors.append(f"entity_patterns[{i}] missing 'entity_pattern' (non-empty string)")
+                else:
+                    try:
+                        re.compile(ep_regex)
+                    except re.error as exc:
+                        errors.append(f"entity_patterns[{i}] entity_pattern regex invalid: {exc}")
 
     return errors
 

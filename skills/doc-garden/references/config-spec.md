@@ -37,12 +37,21 @@
       "key_group": 1,
       "value_group": 2
     }
-  ]
+  ],
+  "entity_patterns": [
+    {
+      "name": "Controller",
+      "source_glob": "backend/src/main/java/com/example/controller/*.java",
+      "entity_pattern": "^(\\w+Controller)\\.java$",
+      "ref_scope": "docs/references/*.md"
+    }
+  ],
+  "entity_policy_file": ".claude/doc-garden-entity-policy.txt"
 }
 ```
 
 **Required fields**: `project_type`, `doc_hierarchy.layer1`
-**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`, `fact_patterns`
+**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`, `fact_patterns`, `entity_patterns`, `entity_policy_file`
 **Never stored**: memory directory path (derived at runtime from cwd)
 
 ### `doc_patterns`
@@ -171,6 +180,75 @@ Example:
     "value_group": 2
   }
 ]
+```
+
+### `entity_patterns` and `entity_policy_file`
+
+Enables the ENTITY_COVERAGE drift check (see drift-taxonomy.md §6.6).
+Catches source-side entities (Controllers, Handlers, Vue views, etc.)
+that exist on disk but are not mentioned in any reference doc.
+
+Each `entity_patterns` entry:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Label for the entity class, used in findings (e.g. `"Controller"`, `"Handler"`). |
+| `source_glob` | yes | Repo-relative glob (passed to `glob.glob` with `recursive=True`) identifying source files. Basenames feed `entity_pattern`. |
+| `entity_pattern` | yes | Python regex applied to each basename. **Group 1 is the entity name.** Files that don't match are silently skipped (not every file under the glob is necessarily an entity). |
+| `ref_scope` | yes | Repo-relative glob for reference docs. The concatenated text of every match is searched for each entity name as a plain substring. |
+
+If `ref_scope` matches 0 files, a single INFO finding is emitted instead
+of flooding with N false positives — this is typically a misconfiguration
+(wrong glob, or refs not yet created).
+
+**Policy file** (`entity_policy_file`, default `.claude/doc-garden-entity-policy.txt`):
+
+Per-line format:
+
+```
+# comments start with '#'
+LEVEL: EntityName  # reason
+```
+
+| Level | Effect in v1 |
+|-------|--------------|
+| `IGNORED` | Entity is skipped silently (dev/test-only, not a business surface) |
+| `KNOWN_UNDOCUMENTED` | Silent in v1 (planned: shown only in a future verbose mode) |
+| (absent from policy) | Default path → emit ENTITY_COVERAGE finding |
+
+Malformed policy lines are silently skipped; a typo in a classification
+should not fill the audit report with noise. Validate the policy file
+manually when adding entries.
+
+**Convention**: every `IGNORED` / `KNOWN_UNDOCUMENTED` entry carries a
+reason after `#`. Entries without reasons are not rejected by the
+parser, but reviewers should reject them at code review.
+
+Example setup:
+
+```json
+"entity_patterns": [
+  {
+    "name": "Controller",
+    "source_glob": "backend/src/main/java/com/example/controller/*.java",
+    "entity_pattern": "^(\\w+Controller)\\.java$",
+    "ref_scope": "docs/references/*.md"
+  },
+  {
+    "name": "AdminController",
+    "source_glob": "backend/src/main/java/com/example/admin/**/*.java",
+    "entity_pattern": "^(Admin\\w+Controller)\\.java$",
+    "ref_scope": "docs/references/admin-*.md"
+  }
+]
+```
+
+Policy example:
+
+```
+IGNORED: HealthCheckController     # liveness probe, no business surface
+IGNORED: MetricsController         # Prometheus scrape endpoint
+KNOWN_UNDOCUMENTED: MemoController # edge feature, planned for content-ref
 ```
 
 ## Target Skeletons by Project Type

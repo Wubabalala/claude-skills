@@ -156,6 +156,55 @@ Eight categories of documentation drift, with detection algorithms and severity.
 
 **Why not a custom hook**: this pattern is common enough (line counts, versions, ports, URLs) that a regex-driven config is cheaper than implementing per-project Python. Custom hooks remain available for facts where regex can't express the semantic.
 
+## 6.6 Entity Coverage (reverse coverage)
+
+**What**: A code-side entity (Controller, Handler, Route, etc.) exists on disk but is never mentioned in any configured reference doc.
+
+| Severity | Condition |
+|----------|-----------|
+| WARNING | Entity extracted from `source_glob` not found in `ref_scope` text, and not policy-classified |
+| INFO | `ref_scope` glob matches 0 files (likely misconfiguration — emits one finding, not N per entity) |
+
+**Truth source**: source-code filesystem (entities are real; refs must catch up)
+
+**Algorithm**:
+1. For each `entity_patterns` entry:
+   a. Glob `source_glob` (recursive) under `cwd`
+   b. Apply `entity_pattern` regex to each **basename**; group 1 = entity name
+   c. Concatenate every doc matching `ref_scope` into one text blob
+   d. For each entity: if name appears as substring in blob → covered, skip
+2. Consult `entity_policy_file` (default `.claude/doc-garden-entity-policy.txt`):
+   - `IGNORED: EntityName # reason` → silent (test-only / dev-only / non-business)
+   - `KNOWN_UNDOCUMENTED: EntityName # reason` → silent in v1 (future verbose mode)
+   - Absent from policy → ENTITY_COVERAGE WARNING
+
+**Policy file format**:
+
+```
+# comment
+IGNORED: TestController     # dev-only endpoint, no business logic
+KNOWN_UNDOCUMENTED: MemoController  # edge feature, pending docs
+```
+
+Malformed policy lines are silently skipped to avoid drowning the report in policy-typo noise.
+
+**Example entity_patterns entry**:
+
+```json
+{
+  "name": "Controller",
+  "source_glob": "backend/src/main/java/com/example/controller/*.java",
+  "entity_pattern": "^(\\w+Controller)\\.java$",
+  "ref_scope": "docs/references/*.md"
+}
+```
+
+**Verification path** (in fix_suggestion):
+1. Add the entity to a relevant ref (expand existing, or create a new one)
+2. If genuinely not worth documenting, classify in policy file WITH a reason
+
+**Why not a custom hook**: reverse-coverage is a common pattern (Java Controller classes, FastAPI `@router`, Vue views) where the entity name is extractable from a filename glob. Patterns + policy file express 90% of real cases without code.
+
 ## 7. Missing Skeleton Sections (normalize)
 
 **What**: CLAUDE.md lacks required sections for its project type.

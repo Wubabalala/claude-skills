@@ -19,6 +19,7 @@ from core.doc_garden_core import (
     config_value_drift_check,
     structure_drift_check,
     fact_value_conflict_check,
+    entity_coverage_check,
     generate_draft_config,
     has_config,
     save_config,
@@ -1325,3 +1326,143 @@ class TestFactValueConflict:
             cfg.update(extra)
             errors = validate_config(cfg)
             assert any("fact_patterns" in e for e in errors), f"missed: {extra}"
+
+
+# ---------------------------------------------------------------------------
+# entity_coverage_check
+# ---------------------------------------------------------------------------
+
+class TestEntityCoverage:
+    """ENTITY_COVERAGE detects source entities not cited in any reference doc."""
+
+    def _write(self, path: Path, content: str):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def _cfg(self):
+        return {
+            "project_type": "standalone",
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "entity_patterns": [
+                {
+                    "name": "Controller",
+                    "source_glob": "src/controller/*.java",
+                    "entity_pattern": r"^(\w+Controller)\.java$",
+                    "ref_scope": "docs/references/*.md",
+                }
+            ],
+            "entity_policy_file": ".claude/entity-policy.txt",
+        }
+
+    def _scaffold(self, tmp_path, controllers, refs, policy_lines=None):
+        """Create a mini project: controllers/ Java files, refs/ md files, optional policy."""
+        (tmp_path / "CLAUDE.md").write_text("# stub\n", encoding="utf-8")
+        for c in controllers:
+            self._write(tmp_path / "src" / "controller" / f"{c}.java",
+                        f"public class {c} {{}}\n")
+        for fname, body in refs.items():
+            self._write(tmp_path / "docs" / "references" / fname, body)
+        if policy_lines is not None:
+            self._write(tmp_path / ".claude" / "entity-policy.txt",
+                        "\n".join(policy_lines) + "\n")
+
+    def test_missing_controller_reported(self, tmp_path):
+        """Controller on disk but absent from every ref → finding."""
+        self._scaffold(
+            tmp_path,
+            controllers=["UserController", "PaymentController"],
+            refs={"payment-ref.md": "# Payment\n\nPaymentController handles checkout.\n"},
+        )
+        findings = entity_coverage_check(str(tmp_path), self._cfg())
+        entity_findings = [f for f in findings if f.drift_type == DriftType.ENTITY_COVERAGE]
+        # PaymentController covered, UserController missing → exactly 1 finding
+        assert len(entity_findings) == 1
+        f = entity_findings[0]
+        assert f.severity == Severity.WARNING
+        assert "UserController" in f.detail
+        assert "Controller" in f.detail  # pattern name appears in detail
+
+    def test_covered_entity_silent(self, tmp_path):
+        """Every controller mentioned in a ref → zero findings."""
+        self._scaffold(
+            tmp_path,
+            controllers=["UserController", "PaymentController"],
+            refs={
+                "auth-ref.md": "UserController is the auth entry point.\n",
+                "payment-ref.md": "PaymentController handles checkout.\n",
+            },
+        )
+        findings = entity_coverage_check(str(tmp_path), self._cfg())
+        assert [f for f in findings if f.drift_type == DriftType.ENTITY_COVERAGE] == []
+
+    def test_ignored_policy_silent(self, tmp_path):
+        """IGNORED classification suppresses the finding."""
+        self._scaffold(
+            tmp_path,
+            controllers=["TestOnlyController"],
+            refs={"api-ref.md": "# nothing\n"},
+            policy_lines=["IGNORED: TestOnlyController  # dev-only endpoint"],
+        )
+        findings = entity_coverage_check(str(tmp_path), self._cfg())
+        assert [f for f in findings if f.drift_type == DriftType.ENTITY_COVERAGE] == []
+
+    def test_known_undocumented_policy_silent_v1(self, tmp_path):
+        """KNOWN_UNDOCUMENTED is silent in v1 (verbose mode is future work)."""
+        self._scaffold(
+            tmp_path,
+            controllers=["MemoController"],
+            refs={"api-ref.md": "# nothing\n"},
+            policy_lines=["KNOWN_UNDOCUMENTED: MemoController  # edge feature"],
+        )
+        findings = entity_coverage_check(str(tmp_path), self._cfg())
+        assert [f for f in findings if f.drift_type == DriftType.ENTITY_COVERAGE] == []
+
+    def test_empty_ref_scope_emits_single_info(self, tmp_path):
+        """ref_scope matching zero files → single INFO warning, not N-per-entity spam."""
+        self._scaffold(
+            tmp_path,
+            controllers=["UserController", "PaymentController"],
+            refs={},  # no refs at all
+        )
+        findings = entity_coverage_check(str(tmp_path), self._cfg())
+        entity_findings = [f for f in findings if f.drift_type == DriftType.ENTITY_COVERAGE]
+        assert len(entity_findings) == 1
+        assert entity_findings[0].severity == Severity.INFO
+        assert "matched 0 files" in entity_findings[0].detail
+
+    def test_run_audit_wires_check(self, tmp_path):
+        """run_audit surfaces ENTITY_COVERAGE when entity_patterns is set."""
+        self._scaffold(
+            tmp_path,
+            controllers=["OrphanController"],
+            refs={"api-ref.md": "# nothing\n"},
+        )
+        findings = run_audit(str(tmp_path), self._cfg())
+        assert any(f.drift_type == DriftType.ENTITY_COVERAGE for f in findings)
+
+    def test_no_entity_patterns_no_check(self, tmp_path):
+        """Absent entity_patterns → check is a no-op."""
+        self._scaffold(
+            tmp_path,
+            controllers=["OrphanController"],
+            refs={},
+        )
+        cfg = self._cfg()
+        cfg["entity_patterns"] = []
+        assert entity_coverage_check(str(tmp_path), cfg) == []
+
+    def test_validate_config_catches_bad_entity_patterns(self):
+        """Schema validation surfaces malformed entity_patterns entries."""
+        cases = [
+            {"entity_patterns": "not-a-list"},
+            {"entity_patterns": [{"source_glob": "a", "entity_pattern": "b", "ref_scope": "c"}]},  # missing name
+            {"entity_patterns": [{"name": "n", "entity_pattern": "b", "ref_scope": "c"}]},          # missing source_glob
+            {"entity_patterns": [{"name": "n", "source_glob": "a", "ref_scope": "c"}]},              # missing entity_pattern
+            {"entity_patterns": [{"name": "n", "source_glob": "a", "entity_pattern": "b"}]},         # missing ref_scope
+            {"entity_patterns": [{"name": "n", "source_glob": "a", "entity_pattern": "(", "ref_scope": "c"}]},  # bad regex
+        ]
+        for extra in cases:
+            cfg = {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"}}
+            cfg.update(extra)
+            errors = validate_config(cfg)
+            assert any("entity_patterns" in e for e in errors), f"missed: {extra}"
