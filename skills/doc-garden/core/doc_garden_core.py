@@ -56,6 +56,20 @@ DEFAULT_CONFIG = {
     ],
     "staleness_threshold_days": 14,
     "ignore_paths": ["node_modules/", ".git/", "dist/", ".venv/", "__pycache__/"],
+    # URL-like path prefixes to ignore during PATH_ROT. Reference docs often
+    # embed API endpoint strings that look like file paths (e.g. "/admin/auth/login")
+    # but are not repo files. Each entry is a literal prefix string; a reference
+    # starting with any of these is treated as non-file and skipped.
+    # Example: ["/api/", "/admin/", "/webhook/"].
+    "ignore_url_prefixes": [],
+    # Additional project-convention prefixes tried as a last-resort fallback
+    # when `resolve_reference`'s generic (doc location / project root) candidates
+    # all fail. Useful for monorepos where docs reference code with short
+    # relative paths like "components/Foo.vue" but the actual file lives at
+    # "frontend/src/components/Foo.vue". Each entry is a repo-relative directory;
+    # the tool prepends each in order and checks existence.
+    # Example: ["frontend/src/", "backend/src/main/java/com/example/"].
+    "generic_path_fallbacks": [],
 }
 
 
@@ -676,10 +690,23 @@ _NOT_A_LOCAL_PATH = re.compile(r"""
 _GITHUB_ORG_REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
 
 
-def _is_local_repo_path(path_str: str) -> bool:
-    """Filter out paths that are clearly not local repository file references."""
+def _is_local_repo_path(path_str: str, config: Optional[dict] = None) -> bool:
+    """Filter out paths that are clearly not local repository file references.
+
+    `config` is optional for backwards compatibility; when provided, also
+    consults `ignore_url_prefixes` to skip HTTP-endpoint-like strings that
+    happen to look like paths (e.g. "/admin/auth/login").
+    """
     if _NOT_A_LOCAL_PATH.search(path_str):
         return False
+    # ignore_url_prefixes: per-project HTTP endpoint prefixes that should
+    # never be treated as file paths (e.g. "/api/", "/admin/"). Opt-in via
+    # config so we don't over-filter docs that genuinely reference files
+    # under a literal `/api/` directory.
+    if config:
+        for p in (config.get("ignore_url_prefixes") or []):
+            if p and path_str.startswith(p):
+                return False
     # Must contain a dot (file extension) or end with / (directory)
     # Bare names like "deploy.sh" are ok, but "service/impl/" needs /
     # Skip if it's just a bare word without extension or slash
@@ -694,10 +721,11 @@ def _is_local_repo_path(path_str: str) -> bool:
     return True
 
 
-def _extract_paths_from_doc(filepath: str) -> list:
+def _extract_paths_from_doc(filepath: str, config: Optional[dict] = None) -> list:
     """Extract file/dir paths mentioned in a markdown doc.
     Only extracts paths that look like local repository file references.
     Skips content inside fenced code blocks (``` ... ```).
+    `config` optional — enables `ignore_url_prefixes` filtering when provided.
     Returns list of (path_str, line_number).
     """
     paths = []
@@ -716,12 +744,12 @@ def _extract_paths_from_doc(filepath: str) -> list:
                 # Paths in backticks (inline code, not fenced blocks)
                 for m in _PATH_IN_BACKTICKS.finditer(line):
                     candidate = m.group(1)
-                    if candidate and not candidate.startswith("http") and _is_local_repo_path(candidate):
+                    if candidate and not candidate.startswith("http") and _is_local_repo_path(candidate, config):
                         paths.append((candidate, i))
                 # Paths in markdown links (not URLs)
                 for m in _PATH_IN_LINKS.finditer(line):
                     href = m.group(2)
-                    if href and not href.startswith("http") and not href.startswith("#") and _is_local_repo_path(href):
+                    if href and not href.startswith("http") and not href.startswith("#") and _is_local_repo_path(href, config):
                         paths.append((href, i))
     except (OSError, UnicodeDecodeError):
         pass
@@ -852,7 +880,7 @@ def resolve_reference(path_str: str, doc_abs: str, cwd: str, config: dict) -> Re
         status = "exists" if os.path.exists(cand) else "missing"
         return ResolveResult(status=status, candidates=[cand])
 
-    # No resolver prefix matched — fall back to generic three-way resolution
+    # No resolver prefix matched — fall back to generic resolution
     doc_dir = os.path.dirname(doc_abs)
     candidates = [
         os.path.join(doc_dir, path_str),
@@ -875,6 +903,19 @@ def resolve_reference(path_str: str, doc_abs: str, cwd: str, config: dict) -> Re
                     candidates.append(os.path.join(root_dir, leaf))
         except OSError:
             pass
+
+    # Last-resort: user-configured project-convention fallback prefixes.
+    # Monorepo / single-repo layouts often reference code with short relative
+    # paths (e.g. "components/Foo.vue") even though the real file sits under
+    # a known prefix ("frontend/src/components/Foo.vue"). Projects declare
+    # those prefixes via `generic_path_fallbacks` so each is prepended in
+    # order and checked for existence.
+    for prefix in (config.get("generic_path_fallbacks") or []):
+        if not isinstance(prefix, str) or not prefix:
+            continue
+        # Normalize: ensure prefix ends with separator so join is clean
+        norm = prefix.rstrip("/").rstrip("\\")
+        candidates.append(os.path.join(cwd, norm, path_str))
 
     if any(os.path.exists(c) for c in candidates):
         return ResolveResult(status="exists", candidates=candidates)
@@ -899,7 +940,7 @@ def path_rot_check(cwd: str, config: dict) -> list:
         if not os.path.exists(doc_abs):
             continue
 
-        for path_str, line_no in _extract_paths_from_doc(doc_abs):
+        for path_str, line_no in _extract_paths_from_doc(doc_abs, config):
             result = resolve_reference(path_str, doc_abs, cwd, config)
             if result.status == "missing":
                 findings.append(Finding(
@@ -919,11 +960,44 @@ def path_rot_check(cwd: str, config: dict) -> list:
 # Staleness Check (git timestamp)
 # ---------------------------------------------------------------------------
 
-def _git_last_modified(path: str) -> int:
-    """Get last commit timestamp for a path via git log.
-    Returns epoch seconds, or 0 if git not available or path not tracked.
+def _is_git_tracked(path: str) -> bool:
+    """Return True if `path` is currently tracked by git in its repo.
+
+    A file that was tracked then `git rm`'d and added to .gitignore will
+    return False here (even though `git log` still returns a timestamp
+    for the deletion commit). That's the intended distinction: staleness
+    is about "docs following code currently in version control"; a file
+    that's no longer tracked can't meaningfully be compared against code.
     """
     import subprocess
+    try:
+        cwd = os.path.dirname(path) or "."
+        if not os.path.isdir(cwd):
+            return False
+        basename = os.path.basename(path)
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", basename],
+            capture_output=True, text=True, timeout=5, cwd=cwd,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def _git_last_modified(path: str) -> int:
+    """Get last commit timestamp for a path via git log.
+    Returns epoch seconds, or 0 if git not available or path not currently
+    tracked (drift-taxonomy §6 says "silently skips untracked files";
+    this is the enforcement point).
+    """
+    import subprocess
+    # Untracked files (never committed OR previously committed but now
+    # .gitignore'd + git rm'd) should be skipped. Without this guard,
+    # `git log` returns the last commit timestamp of a since-deleted file
+    # and staleness reports spurious "N days behind" for files the project
+    # has intentionally removed from version control.
+    if not _is_git_tracked(path):
+        return 0
     try:
         cwd = os.path.dirname(path) or "."
         if not os.path.isdir(cwd):

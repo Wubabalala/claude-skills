@@ -31,8 +31,11 @@ Eight categories of documentation drift, with detection algorithms and severity.
 
 **Algorithm**:
 1. Extract paths from CLAUDE.md: backtick patterns and markdown links `[text](path)`
-2. Filter out: URLs, anchors, `ignore_paths`, server absolute paths (`/opt/`, `/apps/`), branch names (`devlop/`), timezone strings (`Asia/`), content inside fenced code blocks
-3. Resolve relative to doc location, module root, AND project root
+2. Filter out: URLs, anchors, `ignore_paths`, server absolute paths (`/opt/`, `/apps/`), branch names (`devlop/`), timezone strings (`Asia/`), content inside fenced code blocks, plus per-project `ignore_url_prefixes` (opt-in HTTP endpoint prefixes like `/api/`, `/admin/`)
+3. Resolve in this order:
+   a. `path_resolvers` prefix match (memory/, plans/, or user-defined)
+   b. Generic fallback: doc location, project root, module root glob
+   c. User-configured `generic_path_fallbacks` prefixes (e.g. `frontend/src/`, `backend/src/main/java/com/example/`)
 4. If none resolves → PATH_ROT finding
 
 ## 3. Cross-Layer Contradiction
@@ -117,7 +120,7 @@ Eight categories of documentation drift, with detection algorithms and severity.
 3. Get last commit time: `git log -1 --format=%at -- <path>`
 4. If code_time - doc_time > `staleness_threshold_days` × 86400 → STALENESS finding
 
-**Silently skips**: non-git projects, untracked files, files with no git history
+**Silently skips**: non-git projects, untracked files (including previously-committed files that were subsequently `git rm`'d and added to `.gitignore` — `_is_git_tracked` checks current tracking status via `git ls-files --error-unmatch`, not historical commits), files with no git history
 
 ## 7. Missing Skeleton Sections (normalize)
 

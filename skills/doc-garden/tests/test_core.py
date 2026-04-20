@@ -281,6 +281,88 @@ class TestPathRotCheck:
         assert any("main.py" in d for d in rot_paths), rot_paths
         assert any("app.yml" in d for d in rot_paths), rot_paths
 
+    def test_ignore_url_prefixes_skips_http_endpoint(self, tmp_path):
+        """HTTP endpoint strings like `/admin/auth/login` should NOT be flagged
+        as PATH_ROT when the project opts in via `ignore_url_prefixes`."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Login: `/admin/auth/login`\nCallback: `/api/payment/callback/wechat`\n"
+            "Real file: `src/main.py`\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.py").write_text("", encoding="utf-8")
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "ignore_paths": [],
+            "ignore_url_prefixes": ["/admin/", "/api/"],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("admin" in d for d in rot_paths), rot_paths
+        assert not any("/api/payment" in d for d in rot_paths), rot_paths
+
+    def test_ignore_url_prefixes_default_empty_still_flags(self, tmp_path):
+        """Without opt-in, URL-like paths are still caught (backward compat)."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Endpoint: `/admin/dashboard`\n", encoding="utf-8"
+        )
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert any("admin/dashboard" in f.detail for f in rot), rot
+
+    def test_generic_path_fallbacks_resolves_monorepo_prefix(self, tmp_path):
+        """Short relative references resolve against configured fallback prefixes."""
+        # Simulate monorepo layout: real file under frontend/src/
+        (tmp_path / "frontend" / "src" / "components").mkdir(parents=True)
+        (tmp_path / "frontend" / "src" / "components" / "Foo.vue").write_text(
+            "", encoding="utf-8"
+        )
+        (tmp_path / "CLAUDE.md").write_text(
+            "See `components/Foo.vue`\n", encoding="utf-8"
+        )
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "ignore_paths": [],
+            "generic_path_fallbacks": ["frontend/src/"],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not rot, f"expected no PATH_ROT with fallback, got: {rot}"
+
+    def test_generic_path_fallbacks_flags_when_all_fail(self, tmp_path):
+        """Fallback prefixes are last resort; truly missing files still flagged."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Missing: `components/Ghost.vue`\n", encoding="utf-8"
+        )
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "ignore_paths": [],
+            "generic_path_fallbacks": ["frontend/src/", "backend/src/"],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert any("Ghost.vue" in f.detail for f in rot), rot
+
+    def test_generic_path_fallbacks_ordered_first_hit_wins(self, tmp_path):
+        """Fallbacks checked in order; if any prefix resolves, no PATH_ROT."""
+        (tmp_path / "backend" / "src" / "svc").mkdir(parents=True)
+        (tmp_path / "backend" / "src" / "svc" / "Impl.java").write_text(
+            "", encoding="utf-8"
+        )
+        (tmp_path / "CLAUDE.md").write_text(
+            "Service: `svc/Impl.java`\n", encoding="utf-8"
+        )
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "ignore_paths": [],
+            # frontend 先, backend 后; backend 命中也算成功
+            "generic_path_fallbacks": ["frontend/src/", "backend/src/"],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot = [f for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not rot, f"expected backend fallback to resolve, got: {rot}"
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -443,6 +525,51 @@ class TestStalenessCheck:
         assert isinstance(findings, list)
         for f in findings:
             assert f.drift_type == DriftType.STALENESS
+
+    def test_untracked_file_skipped(self, tmp_path):
+        """A file that exists on disk but is not tracked by git should be
+        silently skipped (drift-taxonomy §6 contract). This covers both
+        'never committed' and 'previously committed then gitignored + rm'."""
+        import subprocess
+        # Initialize a git repo
+        subprocess.run(["git", "init", "-q"], cwd=str(tmp_path), check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(tmp_path), check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=str(tmp_path), check=True)
+        # Commit something so there IS a git history (needed for the `git log -- .`
+        # query in staleness_check to return nonzero)
+        (tmp_path / "dummy.txt").write_text("seed", encoding="utf-8")
+        subprocess.run(["git", "add", "dummy.txt"], cwd=str(tmp_path), check=True)
+        subprocess.run(["git", "commit", "-m", "seed", "-q"], cwd=str(tmp_path), check=True)
+        # Create CLAUDE.md but DON'T add it to git (untracked)
+        (tmp_path / "CLAUDE.md").write_text("# Root doc", encoding="utf-8")
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "staleness_threshold_days": 1}
+        findings = staleness_check(str(tmp_path), config)
+        # Untracked CLAUDE.md → no STALENESS finding
+        stale = [f for f in findings if f.drift_type == DriftType.STALENESS]
+        assert not stale, f"untracked CLAUDE.md should not report STALENESS, got: {stale}"
+
+    def test_gitignored_file_skipped(self, tmp_path):
+        """A file that was tracked, git rm'd, and added to .gitignore should
+        be treated as untracked and skipped. This is the real-world scenario:
+        CLAUDE.md used to be in git, got rm'd and gitignored."""
+        import subprocess
+        subprocess.run(["git", "init", "-q"], cwd=str(tmp_path), check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(tmp_path), check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=str(tmp_path), check=True)
+        (tmp_path / "CLAUDE.md").write_text("# Initial", encoding="utf-8")
+        subprocess.run(["git", "add", "CLAUDE.md"], cwd=str(tmp_path), check=True)
+        subprocess.run(["git", "commit", "-m", "initial", "-q"], cwd=str(tmp_path), check=True)
+        # Now rm and gitignore
+        subprocess.run(["git", "rm", "CLAUDE.md", "-q"], cwd=str(tmp_path), check=True)
+        (tmp_path / ".gitignore").write_text("CLAUDE.md\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore"], cwd=str(tmp_path), check=True)
+        subprocess.run(["git", "commit", "-m", "gitignore", "-q"], cwd=str(tmp_path), check=True)
+        # Recreate locally (untracked)
+        (tmp_path / "CLAUDE.md").write_text("# Local only", encoding="utf-8")
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "staleness_threshold_days": 1}
+        findings = staleness_check(str(tmp_path), config)
+        stale = [f for f in findings if f.drift_type == DriftType.STALENESS]
+        assert not stale, f"gitignored + rm'd CLAUDE.md should skip STALENESS, got: {stale}"
 
 
 # ---------------------------------------------------------------------------

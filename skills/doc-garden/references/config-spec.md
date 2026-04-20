@@ -27,12 +27,14 @@
     }
   },
   "staleness_threshold_days": 14,
-  "ignore_paths": ["node_modules/", ".git/"]
+  "ignore_paths": ["node_modules/", ".git/"],
+  "ignore_url_prefixes": ["/api/", "/admin/"],
+  "generic_path_fallbacks": ["frontend/src/", "backend/src/main/java/com/example/"]
 }
 ```
 
 **Required fields**: `project_type`, `doc_hierarchy.layer1`
-**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`
+**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`
 **Never stored**: memory directory path (derived at runtime from cwd)
 
 ### `doc_patterns`
@@ -74,7 +76,47 @@ Resolver outcomes (`ResolveResult.status`):
   silence; user authored the ref knowing it doesn't resolve locally)
 
 If no resolver prefix matches, resolution falls back to the generic
-three-way (doc location / project root / module root glob).
+three-way (doc location / project root / module root glob) and finally
+`generic_path_fallbacks` (see below).
+
+### `ignore_url_prefixes`
+
+List of literal string prefixes; any referenced path starting with one
+of these is treated as **not a file** and skipped during PATH_ROT. Useful
+for docs that embed API endpoint strings (e.g. `/admin/auth/login`) which
+look like file paths but aren't. Default: `[]` (no filtering — opt-in per
+project so we don't over-filter docs that genuinely reference files under
+a literal `/api/` directory).
+
+Example: `["/api/", "/admin/", "/webhook/", "/actuator/"]`.
+
+### `generic_path_fallbacks`
+
+List of repo-relative directory prefixes tried as a **last-resort fallback**
+when `resolve_reference`'s generic candidates (doc location, project root,
+module root glob) all fail. Each entry is prepended in order and checked
+for existence.
+
+Typical use: monorepo / single-repo projects where docs reference code
+with short relative paths (`components/Foo.vue`) but the actual file lives
+under a conventional prefix (`frontend/src/components/Foo.vue`). Declaring
+the prefix once in config avoids peppering every reference with the long
+path.
+
+Example:
+
+```json
+"generic_path_fallbacks": [
+  "frontend/src/",
+  "backend/src/main/java/com/example/",
+  "docs/references/"
+]
+```
+
+Default: `[]`.
+
+**Order matters**: first existing file wins. Typical order is most-common
+first (e.g. frontend before backend for a frontend-heavy project).
 
 ## Target Skeletons by Project Type
 
