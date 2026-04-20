@@ -272,6 +272,22 @@ class TestPathRotCheck:
         assert not any("agents-radar" in d for d in rot_paths), rot_paths
         assert not any("my-tool" in d for d in rot_paths), rot_paths
 
+    def test_path_rot_skips_paths_with_mid_ellipsis(self, tmp_path):
+        """Paths with `.../` anywhere (author's shorthand for elided middle
+        directories) are not filesystem claims — should not be flagged."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Doc: `auto-submit-api/.../job/docs/CODE_REFERENCE.md`\n"
+            "Narrative: `.../config/app.yml`\n"
+            "Real file: `src/main.py`\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.py").write_text("", encoding="utf-8")
+        config = {"doc_hierarchy": {"layer1": "CLAUDE.md"}, "ignore_paths": []}
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("..." in d for d in rot_paths), rot_paths
+
     def test_path_rot_skips_windows_bash_drive_letter_paths(self, tmp_path):
         """Git-Bash / MSYS `/c/Users/...` / `/d/work/...` paths reference the
         author's local machine, not repo files — should not be flagged."""

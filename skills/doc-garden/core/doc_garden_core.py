@@ -712,8 +712,11 @@ _NOT_A_LOCAL_PATH = re.compile(r"""
     ^/\w+/docker_modules/ |
 
     # Markdown / prose placeholder ellipsis for truncated paths.
-    # Example: `.../config/app.yml` in a narrative like "see .../app.yml".
-    ^\.\.\./ |
+    # `.../` anywhere — prose like "see .../app.yml" or table cells like
+    # "auto-submit-api/.../job/docs/CODE_REFERENCE.md" where the author
+    # elides middle directories. `^` anchor covers leading case, inline
+    # alternative catches middle-of-path use (common in compact tables).
+    ^\.\.\./ | /\.\.\./ |
 
     # Windows absolute paths. Authors use these when referencing local tools
     # or external machines, not repo-relative files.
