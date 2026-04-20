@@ -29,6 +29,7 @@
   "staleness_threshold_days": 14,
   "ignore_paths": ["node_modules/", ".git/"],
   "ignore_url_prefixes": ["/api/", "/admin/"],
+  "ignore_path_patterns": ["*your_service*", ".cursor/*"],
   "generic_path_fallbacks": ["frontend/src/", "backend/src/main/java/com/example/"],
   "skip_bare_filenames": false,
   "fact_patterns": [
@@ -52,7 +53,7 @@
 ```
 
 **Required fields**: `project_type`, `doc_hierarchy.layer1`
-**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `generic_path_fallbacks`, `skip_bare_filenames`, `fact_patterns`, `entity_patterns`, `entity_policy_file`
+**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `ignore_path_patterns`, `generic_path_fallbacks`, `skip_bare_filenames`, `fact_patterns`, `entity_patterns`, `entity_policy_file`
 **Never stored**: memory directory path (derived at runtime from cwd)
 
 ### `doc_patterns`
@@ -107,6 +108,36 @@ project so we don't over-filter docs that genuinely reference files under
 a literal `/api/` directory).
 
 Example: `["/api/", "/admin/", "/webhook/", "/actuator/"]`.
+
+### `ignore_path_patterns`
+
+Glob patterns (fnmatch semantics) matched against the **raw path string**
+extracted from a doc. Complements the other two ignore knobs:
+
+| Knob | Match against | Best for |
+|---|---|---|
+| `ignore_paths` | substring anywhere in path | directory prefixes (`node_modules/`, `target/`) |
+| `ignore_url_prefixes` | literal left-anchored prefix | HTTP endpoint strings (`/api/`, `/admin/`) |
+| `ignore_path_patterns` | fnmatch glob over whole path | span-across-locations categories |
+
+Use this for:
+
+- **Template placeholders**: `*your_service*`, `*<example>*` — files
+  intentionally referenced as examples in docs, not real code.
+- **Plan-file future references**: `*scripts/future-tool*` — design docs
+  naming not-yet-implemented files.
+- **Competitor/external tool paths**: `.cursor/*`, `.trae/*`,
+  `.github/copilot-*` — mentioned for context, not tracked locally.
+
+Pattern semantics:
+
+- `*` matches any run of characters **including `/`** (fnmatch behaviour,
+  convenient for "anywhere in path").
+- `**` is translated to `*` for compatibility (no separate "any depth"
+  operator; the single `*` already crosses path separators).
+- Case-sensitive.
+
+Default: `[]`.
 
 ### `generic_path_fallbacks`
 

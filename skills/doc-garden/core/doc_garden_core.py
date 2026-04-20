@@ -2,6 +2,7 @@
 
 All detection logic lives here. SKILL.md and hooks are thin consumers.
 """
+import fnmatch
 import importlib.util
 import json
 import os
@@ -64,6 +65,16 @@ DEFAULT_CONFIG = {
     # starting with any of these is treated as non-file and skipped.
     # Example: ["/api/", "/admin/", "/webhook/"].
     "ignore_url_prefixes": [],
+    # Glob patterns (fnmatch semantics) matched against the full path string
+    # extracted from a doc. Unlike `ignore_paths` (substring match, for
+    # directory prefixes) and `ignore_url_prefixes` (literal prefix for HTTP
+    # endpoints), this handles "known-nonexistent" categories that span
+    # multiple locations: template placeholders (`*your_service*`), plan
+    # files referring to not-yet-implemented code (`*scripts/future-tool*`),
+    # competitor tool paths mentioned for context (`.cursor/*`, `.trae/*`).
+    # Evaluated via fnmatch — `*` matches any run of non-`/` characters; use
+    # `**` for "any depth". Case-sensitive.
+    "ignore_path_patterns": [],
     # Additional project-convention prefixes tried as a last-resort fallback
     # when `resolve_reference`'s generic (doc location / project root) candidates
     # all fail. Useful for monorepos where docs reference code with short
@@ -759,6 +770,15 @@ def _is_local_repo_path(path_str: str, config: Optional[dict] = None) -> bool:
     if config:
         for p in (config.get("ignore_url_prefixes") or []):
             if p and path_str.startswith(p):
+                return False
+        # Glob patterns against the raw extracted path string.
+        # `**` isn't native to fnmatch; translate it to `*` (fnmatch's `*`
+        # already matches across `/`).
+        for pat in (config.get("ignore_path_patterns") or []):
+            if not pat or not isinstance(pat, str):
+                continue
+            norm_pat = pat.replace("**", "*")
+            if fnmatch.fnmatch(path_str, norm_pat):
                 return False
     # Must contain a dot (file extension) or end with / (directory)
     # Bare names like "deploy.sh" are ok, but "service/impl/" needs /
@@ -2331,6 +2351,16 @@ def validate_config(config: dict) -> list:
     sbf = config.get("skip_bare_filenames")
     if sbf is not None and not isinstance(sbf, bool):
         errors.append("skip_bare_filenames must be a boolean")
+
+    # ignore_path_patterns: list of non-empty glob strings
+    ipp = config.get("ignore_path_patterns")
+    if ipp is not None:
+        if not isinstance(ipp, list):
+            errors.append("ignore_path_patterns must be a list")
+        else:
+            for i, pat in enumerate(ipp):
+                if not isinstance(pat, str) or not pat:
+                    errors.append(f"ignore_path_patterns[{i}] must be a non-empty string")
 
     # generic_path_fallbacks: list of str or {scope, prefix} dicts
     fallbacks = config.get("generic_path_fallbacks")

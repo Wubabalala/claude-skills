@@ -289,6 +289,41 @@ class TestPathRotCheck:
         assert not any("/d/work" in d for d in rot_paths), rot_paths
         assert not any("/c/Users" in d for d in rot_paths), rot_paths
 
+    def test_ignore_path_patterns_glob_filter(self, tmp_path):
+        """Glob pattern matches skip PATH_ROT regardless of location."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Template: `src/proto/your_service.proto`\n"
+            "Future: `scripts/future-tool.sh`\n"
+            "Real missing: `src/real-missing.py`\n",
+            encoding="utf-8",
+        )
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "ignore_paths": [],
+            "ignore_path_patterns": ["*your_service*", "*future-tool*"],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not any("your_service" in d for d in rot_paths), rot_paths
+        assert not any("future-tool" in d for d in rot_paths), rot_paths
+        # Real missing still reported
+        assert any("real-missing.py" in d for d in rot_paths), rot_paths
+
+    def test_ignore_path_patterns_competitor_dotdirs(self, tmp_path):
+        """Leading-dot dir patterns work (common competitor paths)."""
+        (tmp_path / "CLAUDE.md").write_text(
+            "Compare: `.cursor/rules/main.md` and `.trae/rules/spec.md`\n",
+            encoding="utf-8",
+        )
+        config = {
+            "doc_hierarchy": {"layer1": "CLAUDE.md"},
+            "ignore_paths": [],
+            "ignore_path_patterns": [".cursor/*", ".trae/*"],
+        }
+        findings = path_rot_check(str(tmp_path), config)
+        rot_paths = [f.detail for f in findings if f.drift_type == DriftType.PATH_ROT]
+        assert not rot_paths, rot_paths
+
     def test_skip_bare_filenames_opt_in(self, tmp_path):
         """With skip_bare_filenames=True, paths without `/` are not PATH_ROT
         even when the file doesn't exist. Paths WITH `/` still checked."""
@@ -1311,6 +1346,18 @@ class TestValidateConfigNew:
                "skip_bare_filenames": "yes"}
         errors = validate_config(cfg)
         assert any("skip_bare_filenames" in e for e in errors)
+
+    def test_catches_bad_ignore_path_patterns(self):
+        cases = [
+            {"ignore_path_patterns": "not-a-list"},
+            {"ignore_path_patterns": [""]},         # empty string
+            {"ignore_path_patterns": [123]},        # wrong type
+        ]
+        for extra in cases:
+            cfg = {"project_type": "standalone", "doc_hierarchy": {"layer1": "CLAUDE.md"}}
+            cfg.update(extra)
+            errors = validate_config(cfg)
+            assert any("ignore_path_patterns" in e for e in errors), f"missed: {extra}"
 
     def test_catches_bad_generic_path_fallbacks(self):
         cases = [
