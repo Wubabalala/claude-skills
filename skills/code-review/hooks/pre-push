@@ -1,0 +1,93 @@
+#!/bin/bash
+# claude-skills code-review pre-push hook v2.2
+# Marker: SKILL_CODE_REVIEW_HOOK=v2.2
+# Consumes v2.1+ machine sentinel (REVIEW_GATE field)
+# DO NOT EDIT - managed by install.sh / install.ps1
+#
+# NOTE: intentionally NOT using `set -e` so fail-open paths are reliable.
+
+warn_and_exit() {
+    local reason="$1"
+
+    if [ "${REVIEW_STRICT:-0}" = "1" ]; then
+        echo "[code-review] ${reason} - REVIEW_STRICT=1, BLOCKING" >&2
+        exit 1
+    fi
+
+    echo "[code-review] ${reason}, skipping (fail-open)" >&2
+    exit 0
+}
+
+if [ "${SKIP_REVIEW:-0}" = "1" ]; then
+    echo "[code-review] SKIP_REVIEW=1, skipping" >&2
+    exit 0
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+    warn_and_exit "claude CLI not found"
+fi
+
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="gtimeout"
+fi
+
+REVIEW_TIMEOUT="${REVIEW_TIMEOUT:-120}"
+
+echo "[code-review] running pre-push review (gate mode)..." >&2
+
+if [ -n "$TIMEOUT_CMD" ]; then
+    output=$("$TIMEOUT_CMD" "$REVIEW_TIMEOUT" claude -p "/code-review --mode=gate" 2>&1)
+    rc=$?
+else
+    echo "[code-review] no timeout command available; running unbounded" >&2
+    output=$(claude -p "/code-review --mode=gate" 2>&1)
+    rc=$?
+fi
+
+if [ "$rc" -eq 124 ]; then
+    warn_and_exit "timed out after ${REVIEW_TIMEOUT}s"
+fi
+
+if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$output" | tail -5 >&2
+    warn_and_exit "claude CLI failed (rc=$rc)"
+fi
+
+ESC="$(printf '\033')"
+plain=$(printf '%s\n' "$output" | sed "s/${ESC}\[[0-9;]*[[:alpha:]]//g")
+block=$(printf '%s\n' "$plain" | awk '/<!--CODE_REVIEW_GATE_BEGIN-->/,/<!--CODE_REVIEW_GATE_END-->/')
+
+if [ -z "$block" ]; then
+    warn_and_exit "sentinel block not found"
+fi
+
+verdict=$(printf '%s\n' "$block" | grep -E '^REVIEW_GATE=(PASS|FAIL)$' | head -1 | cut -d= -f2)
+version=$(printf '%s\n' "$block" | grep -E '^REVIEW_VERSION=' | head -1 | cut -d= -f2)
+
+case "$version" in
+    2.1|2.2)
+        ;;
+    *)
+        warn_and_exit "unsupported sentinel version '${version}' (this hook supports 2.1, 2.2)"
+        ;;
+esac
+
+if [ -z "$verdict" ]; then
+    warn_and_exit "REVIEW_GATE field missing in sentinel"
+fi
+
+if [ "$verdict" = "FAIL" ]; then
+    printf '%s\n' "$output" >&2
+    echo >&2
+    echo "[code-review] REVIEW_GATE=FAIL - push blocked" >&2
+    echo "[code-review] Bypass:" >&2
+    echo "    SKIP_REVIEW=1 git push" >&2
+    echo "    git push --no-verify" >&2
+    exit 1
+fi
+
+echo "[code-review] REVIEW_GATE=PASS (sentinel v${version})" >&2
+exit 0
