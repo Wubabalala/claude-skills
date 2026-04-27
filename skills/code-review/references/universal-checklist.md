@@ -19,6 +19,34 @@ Check whenever code touches money/state across tables:
 - Optimistic lock retry loop inside a `@Transactional(REQUIRES_NEW)` method — transaction is poisoned after first failure, retries are useless
 - For every method involving money: are caller and callee in the same transaction? If they commit independently, what happens when one succeeds and the other rolls back?
 
+## P0 Logging Secrets Leakage [must fix]
+
+Hardcoded secrets in source code is a known risk; this section covers the often-missed runtime leakage and persistence patterns.
+
+### P0a: Direct print of secrets at runtime
+
+Any logger / console call printing a secret-bearing value directly:
+
+- Pattern: `(console|log|logger|print)\.(log|info|debug|warn|error|println).*\b(token|password|auth.?code|secret|api.?key|credential|private.?key)\b`
+- Example: `console.log('Token restored:', user.token)` — leaks the JWT/token to anyone with browser DevTools or to log aggregators
+- Example: `logger.info("authCode={}", authCode)` — same problem on the server side
+
+### P0b: Persisting secrets to client-accessible storage
+
+Writing a secret to any client-readable storage location:
+
+- Pattern: `(localStorage|sessionStorage)\..*\b(token|password|authCode|secret|apiKey|credential)\b`
+- Example: `localStorage.setItem('token', jwt)` — any XSS or third-party JS on the page reads the full credential
+- For `zustand` / `redux-persist` etc.: verify the `partialize` / persist allowlist EXCLUDES secret fields; persisting `user` object that contains `user.token` is the same leak
+
+### P0b extension (conditional): JS-writable cookies
+
+`document.cookie = '...token=...; ...'` is a P0 ONLY when the cookie is JS-writable.
+
+- HttpOnly server-set cookies are NOT in this category — they're a defense (JS cannot read them), not a leak
+- The reviewer MUST first verify the cookie is JS-writable (no `HttpOnly` flag, set from client code) before flagging as P0
+- If unclear, ask the author rather than flagging
+
 ## P1 Logic Bugs [must fix]
 
 - Errors that will cause crashes

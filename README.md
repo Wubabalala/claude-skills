@@ -100,6 +100,70 @@ Recommended actions:
 
 ---
 
+### code-review
+
+**Pragmatic code review & pre-push quality gate, with a machine-readable verdict.**
+
+```bash
+npx skills add Wubabalala/claude-skills@code-review
+```
+
+Then in Claude Code:
+```
+/code-review
+```
+
+#### What It Does
+
+Risk-based code review that catches real bugs (not style nitpicks) and produces output that both humans and machines can trust:
+
+```
+Universal Layer 1 checks (always)
+  ├── P0 Security (hardcoded secrets, SQL injection, XSS, auth removal)
+  ├── P0 Transaction Safety (cross-table atomicity, rollback-only catches)
+  ├── P0 Logging Secrets Leakage (runtime print + client-side persistence)
+  ├── P1 Logic Bugs (crashes, race, return/build mismatch)
+  ├── P1 API Input Validation (NPE on missing fields, parse-without-try)
+  ├── P2 Robustness (N+1, empty catch, ORM pitfalls)
+  └── P3 Maintainability
+
+Project Layer 2 checks (optional, per-project)
+  └── .claude/review-checklist.md — auto-generated from your CLAUDE.md and docs
+
+Output (every report ends with a machine-readable sentinel):
+  <!--CODE_REVIEW_GATE_BEGIN-->
+  REVIEW_GATE=PASS|FAIL
+  REVIEW_P0_COUNT=<int>
+  ... (P1/P2/P3 counts)
+  REVIEW_VERSION=2.1
+  <!--CODE_REVIEW_GATE_END-->
+```
+
+#### Two Run Modes
+
+| Mode | When to use | Behavior |
+|------|-------------|----------|
+| `--mode=interactive` (default) | Human-invoked review | Full markdown report, may ask for confirmation, may offer auto-fix |
+| `--mode=gate` | Pre-push hook / CI | Read-only, never waits for input, never writes files, emits only the sentinel + optional ≤200-word summary |
+
+Unknown `--mode=` values fall back to `interactive`.
+
+#### Why the Sentinel Matters
+
+Without a stable machine-parseable verdict, any pre-push hook that greps `[ NEEDS FIXES ]` from natural-language output will eventually misparse — false positives block clean code, false negatives let regressions through. The sentinel block fixes that:
+
+- HTML-comment wrapped (invisible in rendered markdown, greppable by hooks)
+- Fixed schema, fixed field names, fixed position (always last)
+- v2.2 hook (planned) will consume `^REVIEW_GATE=(PASS|FAIL)$` directly
+
+#### Roadmap (non-binding, subject to change)
+
+- **v2.1 (this release)**: machine-readable verdict layer + secrets-in-logs P0
+- **v2.2 (planned)**: pre-push git hook (sentinel-driven, read-only, install/uninstall scripts)
+- **v2.3 (planned)**: architecture-traps two-way binding + 3-dimensional rule metadata
+
+---
+
 ### playwright-web-automation
 
 **Browser automation that goes beyond recording — render diagrams, automate interactions, export screenshots.**
@@ -151,6 +215,7 @@ SKILL.md (decide which path → skeleton steps)
 | Skill | One-liner | Install |
 |-------|-----------|---------|
 | **[project-onboarding](skills/project-onboarding/)** | Scan codebase, generate docs, capture domain knowledge | `npx skills add Wubabalala/claude-skills@project-onboarding` |
+| **[code-review](skills/code-review/)** | Pragmatic review + machine-readable verdict (`REVIEW_GATE=PASS\|FAIL`) for pre-push hooks | `npx skills add Wubabalala/claude-skills@code-review` |
 | **[playwright-web-automation](skills/playwright-web-automation/)** | Browser automation + diagram rendering with Playwright | `npx skills add Wubabalala/claude-skills@playwright-web-automation` |
 
 More skills coming. Each one is built from real production workflows.

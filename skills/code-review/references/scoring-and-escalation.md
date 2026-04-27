@@ -41,3 +41,18 @@ When any of these patterns appear, regardless of change size, perform deep analy
 - Input validation removed with no replacement
 - New external calls without error handling
 - HIGH risk changes with high impact scope (50+ callers)
+
+## Gate Decision Table (machine verdict, v2.1)
+
+The machine sentinel `REVIEW_GATE` field is computed from the issue counts using this table. It is a deterministic mapping — no model judgment.
+
+| Condition | `REVIEW_GATE` |
+|-----------|---------------|
+| `P0_COUNT > 0` OR `P1_COUNT > 0` | **FAIL** |
+| `P0_COUNT == 0` AND `P1_COUNT == 0` (any P2/P3 count, including zero) | **PASS** |
+
+**v2.1 only emits `PASS` or `FAIL`.** No `DISCUSS` / `WARN` / other states.
+
+This aligns with the existing `must-fix` semantics in the universal checklist: P0 (security / transaction / logging-secrets) and P1 (logic bugs / API input validation) are both defined as `[must fix]`, so any non-zero count of either should block a push.
+
+A future v2.3 may revisit this once architecture-traps integration introduces a meaningful "advisory but not blocking" middle state. Until then, the binary gate is the entire contract.

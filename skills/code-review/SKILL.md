@@ -67,6 +67,77 @@ On review trigger:
 
 ---
 
+## Run Modes (v2.1+)
+
+The skill runs in one of two modes, controlled by the `--mode=` argument.
+
+### `--mode=interactive` (default)
+
+Used when invoked by a human (`/code-review`, "review my code", "check code quality", etc.).
+
+- Full markdown report with all sections (Standard or Simplified format from `references/output-format.md`)
+- May ask user for confirmation before generating `.claude/review-checklist.md`
+- May offer Process Improvement / Auto-Fix suggestions
+- Sentinel block is always appended at the end of the report (see "Sentinel Block" in `references/output-format.md`)
+
+### `--mode=gate` (machine-driven, e.g. pre-push hook)
+
+Used by automated callers like `claude -p "/code-review --mode=gate"` from a git hook or CI.
+
+When `--mode=gate` is set, the skill MUST:
+
+1. **Be read-only** — never call `Edit` / `Write` / `Bash` with mutating commands
+2. **Never wait for user input** — no `AskUserQuestion`, no prompts requiring confirmation
+3. **Never write files** — neither to repo nor to `.claude/`
+4. **Never emit** Process Improvement section, Auto-Fix section, code score, "What Was Done Well" section, or any markdown tables for findings
+
+When `--mode=gate` is set AND `.claude/review-checklist.md` is missing, the skill MUST:
+
+- Skip checklist generation entirely (no prompt, no draft, no write)
+- Run Layer 1 universal checks only
+- Still emit the sentinel block with a verdict
+- Mentioning "Layer 2 unavailable" in the optional summary is allowed but not required
+
+Output layout for `gate` mode (from `references/output-format.md` § "Gate Format"):
+
+```
+[Optional one-paragraph plain-text summary, ≤200 words, no markdown]
+[MAY be empty]
+
+<!--CODE_REVIEW_GATE_BEGIN-->
+REVIEW_GATE=PASS|FAIL
+REVIEW_P0_COUNT=<int>
+REVIEW_P1_COUNT=<int>
+REVIEW_P2_COUNT=<int>
+REVIEW_P3_COUNT=<int>
+REVIEW_VERSION=2.1
+<!--CODE_REVIEW_GATE_END-->
+```
+
+### Mode parsing & fallback
+
+- Parse `--mode=` argument from the user prompt or invocation args
+- Accepted values: `interactive`, `gate`
+- **Unknown values (typos, etc.) MUST fall back to `interactive`** — never crash on parse error
+
+### Strict precedence rule (P0/P1 vs human verdict)
+
+Mirrors `references/output-format.md` § "Final Verdict Rules". Restated here so the skill author cannot miss it:
+
+```
+When P0_COUNT > 0 OR P1_COUNT > 0:
+  Human Final Verdict MUST be `[ NEEDS FIXES ]`.
+  `[ REQUIRES DISCUSSION ]` is FORBIDDEN in this case.
+
+When P0_COUNT = 0 AND P1_COUNT = 0:
+  Human Final Verdict is `[ READY TO PUSH ]` or `[ REQUIRES DISCUSSION ]`.
+  Both map to machine REVIEW_GATE=PASS.
+```
+
+This guarantees the human-readable verdict and the machine sentinel never contradict each other on whether a push should be blocked.
+
+---
+
 ## Review Workflow
 
 ### Step 1: Determine Review Scope

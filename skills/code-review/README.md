@@ -23,6 +23,52 @@ A structured, risk-based code reviewer that catches real bugs — not style nitp
 
 In Claude Code, type `/code-review` or say "review my code", "ready to push", "check code quality".
 
+### Run Modes (v2.1+)
+
+The skill supports two modes via the `--mode=` argument:
+
+| Mode | When | Behavior |
+|------|------|----------|
+| `--mode=interactive` (default) | Human-invoked review | Full markdown report, may ask for confirmation, may offer auto-fix |
+| `--mode=gate` | Pre-push hook / CI / `claude -p` | Read-only, never blocks waiting for input, never writes files; emits only an optional one-paragraph summary plus a machine-readable sentinel block |
+
+Unknown `--mode=` values fall back to `interactive` (no crash).
+
+### Machine-Readable Sentinel (v2.1)
+
+Every report — in any mode — ends with a sentinel block that hooks and CI can grep without parsing markdown:
+
+```
+<!--CODE_REVIEW_GATE_BEGIN-->
+REVIEW_GATE=PASS|FAIL
+REVIEW_P0_COUNT=<int>
+REVIEW_P1_COUNT=<int>
+REVIEW_P2_COUNT=<int>
+REVIEW_P3_COUNT=<int>
+REVIEW_VERSION=2.1
+<!--CODE_REVIEW_GATE_END-->
+```
+
+Decision rule: `REVIEW_GATE=FAIL` iff `P0_COUNT > 0 OR P1_COUNT > 0`, else `PASS`. The sentinel position is always at the end of the report.
+
+### Human ↔ Machine verdict mapping
+
+| Human verdict | `REVIEW_GATE` | Hook behavior |
+|---------------|---------------|----------------|
+| `[ READY TO PUSH ]` | `PASS` | proceed |
+| `[ NEEDS FIXES ]` | `FAIL` | block |
+| `[ REQUIRES DISCUSSION ]` | `PASS` | proceed |
+
+`[ REQUIRES DISCUSSION ]` is a request for architectural conversation, not a must-fix — so the machine verdict still reads `PASS` and the push is not blocked. When `P0_COUNT > 0` or `P1_COUNT > 0`, the human verdict MUST be `[ NEEDS FIXES ]` (DISCUSSION is forbidden in that case) so the human and machine outputs never contradict.
+
+## Roadmap (non-binding, subject to change)
+
+- v2.1 (this release): machine-readable verdict layer (mode + sentinel + log-secrets P0)
+- v2.2 (planned): pre-push hook, sentinel-driven, read-only, includes install/uninstall scripts
+- v2.3 (planned): architecture-traps two-way binding, 3-dimensional metadata (severity / scope / frequency), DISCUSS state may be redefined
+
+Versions and scope may evolve based on real-world usage feedback.
+
 ## Key Features
 
 | Feature | Description |
