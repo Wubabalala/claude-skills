@@ -23,7 +23,7 @@ A structured, risk-based code reviewer that catches real bugs — not style nitp
 
 In Claude Code, type `/code-review` or say "review my code", "ready to push", "check code quality".
 
-### Run Modes (v2.1+)
+### Run Modes (v2.3+)
 
 The skill supports two modes via the `--mode=` argument:
 
@@ -34,7 +34,7 @@ The skill supports two modes via the `--mode=` argument:
 
 Unknown `--mode=` values fall back to `interactive` (no crash).
 
-### Machine-Readable Sentinel (v2.1)
+### Machine-Readable Sentinel (v2.3)
 
 Every report — in any mode — ends with a sentinel block that hooks and CI can grep without parsing markdown:
 
@@ -45,7 +45,7 @@ REVIEW_P0_COUNT=<int>
 REVIEW_P1_COUNT=<int>
 REVIEW_P2_COUNT=<int>
 REVIEW_P3_COUNT=<int>
-REVIEW_VERSION=2.1
+REVIEW_VERSION=2.3
 <!--CODE_REVIEW_GATE_END-->
 ```
 
@@ -64,22 +64,35 @@ Decision rule: `REVIEW_GATE=FAIL` iff `P0_COUNT > 0 OR P1_COUNT > 0`, else `PASS
 ## Roadmap (non-binding, subject to change)
 
 - v2.1 (this release): machine-readable verdict layer (mode + sentinel + log-secrets P0)
-- v2.2 (planned): pre-push hook, sentinel-driven, read-only, includes install/uninstall scripts
-- v2.3 (planned): architecture-traps two-way binding, 3-dimensional metadata (severity / scope / frequency), DISCUSS state may be redefined
+- v2.2: pre-push hook, sentinel-driven, read-only, includes install/uninstall scripts
+- v2.3 (this release): architecture-traps as authoritative source, checklist as derived artifact, dimensional metadata (severity / scope / frequency)
 
 Versions and scope may evolve based on real-world usage feedback.
+
+## Architecture Traps (v2.3)
+
+Project-specific review memory now flows through `architecture-traps.md`.
+
+- repo-level traps live at `docs/architecture-traps.md`
+- module-level traps live at `<module>/docs/architecture-traps.md`
+- `.claude/review-checklist.md` is a generated review view, not the source of truth
+- automated regression detection only applies to traps that include an explicit `signatures` block
+
+In interactive mode, the skill may suggest new traps when the same high-severity pattern appears in `>=3` distinct files. Confirmed backfill writes to traps only; the checklist is refreshed later through the normal generation flow.
 
 ## Key Features
 
 | Feature | Description |
 |---------|-------------|
 | **Risk-based grading** | Files classified as HIGH/MEDIUM/LOW, review depth scales accordingly |
-| **Layer 2 project rules** | Auto-generates `.claude/review-checklist.md` from your CLAUDE.md and docs |
+| **Layer 2 project rules** | Generates `.claude/review-checklist.md` from project docs and `architecture-traps.md` |
 | **Cost-benefit rating** | Every issue rated 1-5 on fix cost vs. impact — you decide what to fix |
 | **"Do NOT report" list** | 7 rules to prevent false positives (intentional design, framework patterns, etc.) |
 | **Large diff handling** | 50+ file changes get risk-tiered: deep analysis for HIGH, surface scan for MEDIUM, skip LOW |
 | **Risk escalation** | New functions without tests auto-escalate from MEDIUM to HIGH |
 | **Red lines** | Deleted security-fix code, removed auth checks → immediate deep investigation |
+| **Traps integration** | Root/module `architecture-traps.md` files act as authoritative project memory for regression detection |
+| **Dimensional metadata** | Checklist entries can carry `severity`, `scope`, and `frequency`, with legacy fallback for older projects |
 
 ## Output Example
 

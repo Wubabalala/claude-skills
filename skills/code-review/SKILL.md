@@ -36,38 +36,43 @@ Focus on finding real problems, not nitpicking.
 Always executed. Language- and framework-agnostic checks.
 
 ### Layer 2: Project-Specific Checks (`.claude/review-checklist.md`)
-Extracted from project documentation. Isolated per project.
+This file is a **DERIVED ARTIFACT** — a generated review view, not an authoritative source.
 
-### review-checklist.md Loading Flow
+The authoritative source is the project's `architecture-traps.md` hierarchy plus any other project docs used during checklist generation.
+
+### review-checklist.md Lifecycle
 
 ```
 On review trigger:
-1. Check for .claude/review-checklist.md in project root
-   - Exists → load it, proceed to review
+1. Discover architecture-traps.md files using the fixed rules in Step 2.5.
+2. Check for .claude/review-checklist.md in project root.
+   - Exists → load it as the current Layer 2 review view.
    - Missing → execute generation flow:
      a. Read project CLAUDE.md
-     b. Read key files under docs/ (architecture-traps.md, etc.)
-     c. Read memory/MEMORY.md (if exists)
+     b. Read discovered architecture-traps.md files
+     c. Read other key docs and MEMORY.md (if present)
      d. Extract check items → generate draft → present to user for confirmation
      e. Write to .claude/review-checklist.md after user confirms
-2. User explicitly says "update review-checklist.md" → re-run generation flow
+3. User explicitly says "update review-checklist.md" → re-run generation flow.
 ```
 
-**Extraction rules**:
+**Generation rules**:
+- Preferred item format follows `references/checklist-schema.md` v2.3 schema
+- Legacy single-line v2.1 checklist items are still supported through the fallback rules in `references/checklist-schema.md`
 - Extract from constraint language: "trap", "never", "must", "don't", "always"
 - Extract from convention language: "use X for", "standard pattern", "required"
 - Extract from architecture decisions that must not be violated
-- Each item format: `- [ ] Short description (source: filename)`
 - Keep total items between 15-30; merge similar items if over
 
 **Isolation rules**:
 - Checklist lives in **current project** `.claude/review-checklist.md`, never global
-- Generation reads only **current project** docs — switching projects naturally isolates
-- Only rebuild when user explicitly requests it
+- Generation reads only **current project** docs and traps — switching projects naturally isolates
+- The checklist **MUST NOT** be used as a config carrier; do not add `traps_file:` frontmatter or similar path overrides
+- New project-specific rules go into `architecture-traps.md`, not directly into the checklist
 
 ---
 
-## Run Modes (v2.1+)
+## Run Modes (v2.3+)
 
 The skill runs in one of two modes, controlled by the `--mode=` argument.
 
@@ -78,6 +83,7 @@ Used when invoked by a human (`/code-review`, "review my code", "check code qual
 - Full markdown report with all sections (Standard or Simplified format from `references/output-format.md`)
 - May ask user for confirmation before generating `.claude/review-checklist.md`
 - May offer Process Improvement / Auto-Fix suggestions
+- May offer `Suggested Traps Additions` after findings are verified
 - Sentinel block is always appended at the end of the report (see "Sentinel Block" in `references/output-format.md`)
 
 ### `--mode=gate` (machine-driven, e.g. pre-push hook)
@@ -87,9 +93,9 @@ Used by automated callers like `claude -p "/code-review --mode=gate"` from a git
 When `--mode=gate` is set, the skill MUST:
 
 1. **Be read-only** — never call `Edit` / `Write` / `Bash` with mutating commands
-2. **Never wait for user input** — no `AskUserQuestion`, no prompts requiring confirmation
+2. **Never wait for user input** — no prompts requiring confirmation
 3. **Never write files** — neither to repo nor to `.claude/`
-4. **Never emit** Process Improvement section, Auto-Fix section, code score, "What Was Done Well" section, or any markdown tables for findings
+4. **Never emit** Process Improvement section, Auto-Fix section, code score, "What Was Done Well" section, `Suggested Traps Additions`, or any markdown tables for findings
 
 When `--mode=gate` is set AND `.claude/review-checklist.md` is missing, the skill MUST:
 
@@ -110,7 +116,7 @@ REVIEW_P0_COUNT=<int>
 REVIEW_P1_COUNT=<int>
 REVIEW_P2_COUNT=<int>
 REVIEW_P3_COUNT=<int>
-REVIEW_VERSION=2.1
+REVIEW_VERSION=2.3
 <!--CODE_REVIEW_GATE_END-->
 ```
 
@@ -160,9 +166,9 @@ This guarantees the human-readable verdict and the machine sentinel never contra
 
 ### Step 2: Load Checklist & Understand Code
 
-1. Load `.claude/review-checklist.md` (per loading flow above)
-   - **If checklist is missing and generation was not triggered** (e.g., user skipped), note at report top: `⚠ Layer 2 not configured — only universal checks applied. Run "update review-checklist.md" to enable project-specific checks.`
-2. Read changed code, understand intent:
+1. Load `.claude/review-checklist.md` if present, using `references/checklist-schema.md`
+   - **If checklist is missing and generation was not triggered** (e.g. user skipped, or `gate` mode), note at report top: `⚠ Layer 2 not configured — only universal checks applied. Run "update review-checklist.md" to enable project-specific checks.`
+2. Read changed code and understand intent:
    - What problem does this code solve?
    - Why was this implementation approach chosen?
    - Are there special contextual constraints?
@@ -171,13 +177,36 @@ This guarantees the human-readable verdict and the machine sentinel never contra
    - **MEDIUM**: Business logic, state changes, new public APIs
    - **LOW**: Comments, test files, UI styling, logging
 
+### Step 2.5: Load Architecture Traps (optional)
+
+Apply the discovery and merge rules from `references/traps-integration.md`.
+
+Fixed rules (no implementer freedom):
+
+1. Load `<repo_root>/docs/architecture-traps.md` if it exists.
+2. For each file in this review's scope, walk upward to find the nearest module root using the module-root heuristics in `references/traps-integration.md`.
+3. For each unique module root found in step 2, load `<module_root>/docs/architecture-traps.md` if it exists.
+4. **Do NOT scan all modules in the repo** — only load module traps for modules touched by this review scope.
+5. Merge precedence for the same `trap_id`: module-level overrides repo-level (closer scope wins).
+
+Additional rules:
+
+- If no traps file is found at any level, skip silently with no warning
+- Only traps with a valid `signatures:` block participate in automated regression detection
+- Traps without `signatures:` remain human-readable guidance only
+
 ### Step 3: Comprehensive Review
 
 #### Layer 1: Universal Checklist
 See `references/universal-checklist.md` for full P0-P3 check items.
 
 #### Layer 2: Project-Specific Checks
-Load check items from `.claude/review-checklist.md` and verify each against changed code.
+
+- Load checklist items from `.claude/review-checklist.md` when present and apply the v2.3 sort order from `references/checklist-schema.md`
+- Load automated regression signatures from the discovered traps hierarchy
+- When a finding matches an existing trap signature, annotate it with the source, for example:
+  - `[REGRESSION-RISK: traps#root.B2]`
+  - `[REGRESSION-RISK: traps#auto-submit-api/B7]`
 
 #### HIGH Risk Additional Checks
 
@@ -211,6 +240,39 @@ Before reporting any finding, apply the verification rules in `references/verifi
 ### Step 5: Auto-Fix Suggestions
 
 For **deterministic issues** (single correct fix, no design decisions involved), provide directly applicable fixes. See `references/output-format.md` for scope and format.
+
+### Step 6: Sediment New Patterns (interactive mode only)
+
+If `--mode=gate`, **SKIP this step entirely**. Gate mode is always read-only.
+
+In interactive mode, after the report:
+
+1. Identify findings meeting **all** criteria:
+   - Same pattern appears in `>= 3` distinct files in this review
+   - Severity is `P1` or `P0`
+   - Not already covered by an existing trap signature
+   - Pattern is concrete enough to express as `grep` and/or `file_pattern`
+2. Emit a `Suggested Traps Additions` section:
+   - One candidate per entry
+   - Include proposed `trap_id`, suggested signature, and observed files
+   - Default target is the nearest module traps file when all hits are in one module; otherwise use repo-level traps
+3. Wait for explicit user confirmation:
+   - Confirm candidates individually
+   - `Confirm all` is allowed only after the candidate list has been shown
+4. On confirmation:
+   - Re-read the target traps file before editing to detect concurrent changes
+   - If the file changed since the report was generated, abort that candidate and ask the user to re-run
+   - Append the confirmed entry to `architecture-traps.md`
+   - **Do NOT touch `.claude/review-checklist.md` directly**
+5. Re-hit handling:
+   - If a confirmed candidate already matches an existing trap, ask whether to upgrade `frequency`
+   - Allowed upgrades: `1x -> 2x+`, `2x+ -> chronic`
+   - Never infer `frequency` automatically from a single review session
+
+Checklist refresh rule:
+
+- The checklist is **not** rewritten immediately after traps backfill
+- Refresh only when the user explicitly runs `update review-checklist.md` or when a later generation flow rebuilds it
 
 ---
 

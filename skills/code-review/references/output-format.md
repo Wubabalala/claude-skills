@@ -69,6 +69,15 @@
 Required before push:
 - [ ] specific fix items
 
+### Suggested Traps Additions (interactive only, when candidates exist)
+> Only include this section when Step 6 surfaced concrete backfill candidates.
+> Each candidate must name the proposed trap id, target traps file, signature, and observed files.
+
+- `trap_id`: B8
+  `target`: docs/architecture-traps.md
+  `signature`: `grep: 'contains\\("[a-z0-9.]+\\.com"\\)'`, `file_pattern: '*.java'`
+  `observed in`: `src/A.java`, `src/B.java`, `src/C.java`
+
 [machine-readable sentinel block — see "Sentinel Block" section below]
 
 ```
@@ -106,7 +115,7 @@ REVIEW_P0_COUNT=<int>
 REVIEW_P1_COUNT=<int>
 REVIEW_P2_COUNT=<int>
 REVIEW_P3_COUNT=<int>
-REVIEW_VERSION=2.1
+REVIEW_VERSION=2.3
 <!--CODE_REVIEW_GATE_END-->
 ```
 
@@ -129,7 +138,7 @@ REVIEW_P0_COUNT=<non-negative int>
 REVIEW_P1_COUNT=<non-negative int>
 REVIEW_P2_COUNT=<non-negative int>
 REVIEW_P3_COUNT=<non-negative int>
-REVIEW_VERSION=2.1
+REVIEW_VERSION=2.3
 <!--CODE_REVIEW_GATE_END-->
 ```
 
@@ -153,7 +162,7 @@ These rules govern report-internal consistency between human-readable verdict an
 
 **Rationale**: the machine verdict only encodes "should this push be blocked?". `[ REQUIRES DISCUSSION ]` is a request for architectural conversation, not a must-fix. A hook seeing `PASS` should let the push through; the human discussion happens in the PR review process or follow-up conversations, outside the gate.
 
-If a future use case demands blocking on architectural concerns, that should be a NEW machine state introduced in v2.3 alongside traps integration, not a retrofit onto the v2.1 binary gate.
+If a future use case demands blocking on architectural concerns, that should be a NEW machine state introduced in a later version, not a retrofit onto the current binary gate.
 
 ### Strict precedence rule (P0/P1 vs human verdict)
 
