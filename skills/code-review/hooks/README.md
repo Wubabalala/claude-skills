@@ -6,7 +6,7 @@ It consumes the v2.1+ machine-readable sentinel:
 
 ```text
 REVIEW_GATE=PASS|FAIL
-REVIEW_VERSION=2.1
+REVIEW_VERSION=2.3
 ```
 
 The hook is **fail-open by default**:
@@ -132,6 +132,7 @@ This hook accepts sentinel versions:
 
 - `2.1`
 - `2.2`
+- `2.3`
 
 Other versions are treated as unsupported and trigger warn-and-skip by default, or block under `REVIEW_STRICT=1`.
 

@@ -68,10 +68,10 @@ verdict=$(printf '%s\n' "$block" | grep -E '^REVIEW_GATE=(PASS|FAIL)$' | head -1
 version=$(printf '%s\n' "$block" | grep -E '^REVIEW_VERSION=' | head -1 | cut -d= -f2)
 
 case "$version" in
-    2.1|2.2)
+    2.1|2.2|2.3)
         ;;
     *)
-        warn_and_exit "unsupported sentinel version '${version}' (this hook supports 2.1, 2.2)"
+        warn_and_exit "unsupported sentinel version '${version}' (this hook supports 2.1, 2.2, 2.3)"
         ;;
 esac
 
