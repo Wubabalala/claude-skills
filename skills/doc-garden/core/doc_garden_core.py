@@ -2068,6 +2068,83 @@ def check_skeleton(cwd: str, config: dict) -> list:
     return items
 
 
+def check_doc_convention(cwd: str, config: dict) -> list:
+    """Audit root triplet + docs skeleton + per-microservice-module four-piece kit.
+
+    Source of truth: ../project-onboarding/references/doc-convention.md §3.
+    Aligned with SKELETONS three-type taxonomy (standalone / monorepo / microservice).
+    All findings emit auto_level="suggest" (no auto-fix).
+    """
+    items = []
+    project_type = config.get("project_type", "standalone")
+
+    # 1. Root triplet
+    for fname in ("CLAUDE.md", "AGENTS.md", "README.md"):
+        if not os.path.exists(os.path.join(cwd, fname)):
+            items.append(NormalizeItem(
+                category="missing_doc",
+                file=fname,
+                detail=f"Root triplet missing: {fname}",
+                suggestion=f"Generate {fname} per doc-convention.md §1",
+                auto_level="suggest",
+            ))
+
+    # 2. docs/ required files
+    for relpath in ("docs/OVERVIEW.md", "docs/architecture-traps.md"):
+        if not os.path.exists(os.path.join(cwd, relpath)):
+            items.append(NormalizeItem(
+                category="missing_doc",
+                file=relpath,
+                detail=f"docs/ required file missing: {relpath}",
+                suggestion=f"Generate {relpath} per doc-convention.md §1",
+                auto_level="suggest",
+            ))
+
+    # 3. docs/ four subdirectories (existence; .gitkeep counts because os.path.isdir is true either way)
+    for subdir in ("plans", "ops", "references", "archive"):
+        dpath = os.path.join(cwd, "docs", subdir)
+        if not os.path.isdir(dpath):
+            items.append(NormalizeItem(
+                category="missing_doc",
+                file=f"docs/{subdir}/",
+                detail=f"docs/ subdirectory missing: {subdir}",
+                suggestion=f"Create docs/{subdir}/ (per doc-convention.md §2)",
+                auto_level="suggest",
+            ))
+
+    # 4. microservice: each layer2 module's four-piece kit
+    if project_type == "microservice":
+        hierarchy = config.get("doc_hierarchy", {})
+        # Deduplicate module directories — layer2 may contain both svc/CLAUDE.md and svc/AGENTS.md
+        module_dirs = sorted({
+            os.path.dirname(p)
+            for p in hierarchy.get("layer2", [])
+            if os.path.dirname(p)
+        })
+        for mod_dir in module_dirs:
+            # Three files
+            for fname in ("CLAUDE.md", "AGENTS.md", "README.md"):
+                if not os.path.exists(os.path.join(cwd, mod_dir, fname)):
+                    items.append(NormalizeItem(
+                        category="missing_doc",
+                        file=f"{mod_dir}/{fname}",
+                        detail="microservice submodule four-piece kit missing",
+                        suggestion=f"Generate {mod_dir}/{fname} per doc-convention.md §3",
+                        auto_level="suggest",
+                    ))
+            # docs/ directory (the fourth piece)
+            if not os.path.isdir(os.path.join(cwd, mod_dir, "docs")):
+                items.append(NormalizeItem(
+                    category="missing_doc",
+                    file=f"{mod_dir}/docs/",
+                    detail="microservice submodule docs/ missing",
+                    suggestion=f"Create {mod_dir}/docs/ per doc-convention.md §3",
+                    auto_level="suggest",
+                ))
+
+    return items
+
+
 def check_frontmatter(cwd: str) -> list:
     """Check if all memory files have YAML frontmatter.
     Returns list of NormalizeItem.
@@ -2178,6 +2255,7 @@ def run_normalize(cwd: str, config: dict = None) -> list:
 
     items = []
     items += check_skeleton(cwd, config)
+    items += check_doc_convention(cwd, config)
     items += check_frontmatter(cwd)
 
     # Also include sunken memory files as normalize items

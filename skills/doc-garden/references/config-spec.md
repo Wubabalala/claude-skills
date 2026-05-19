@@ -6,6 +6,11 @@
 
 ## Schema
 
+> **Three-type project taxonomy:** the detection criteria, default directory
+> skeleton, and naming convention for each `project_type` value live in
+> `../../project-onboarding/references/doc-convention.md` §3.
+> That document is the source of truth; this schema is its encoding.
+
 ```json
 {
   "project_type": "microservice | monorepo | standalone",

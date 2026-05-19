@@ -238,6 +238,14 @@ Output format:
    - Missing sections → suggest adding
    - Missing CLAUDE.md → suggest generating skeleton
 
+   **Convention check** (`check_doc_convention()`, added alongside the skeleton check) additionally verifies:
+   - Root triplet exists: `CLAUDE.md` / `AGENTS.md` / `README.md`
+   - `docs/OVERVIEW.md` + `docs/architecture-traps.md` exist
+   - `docs/{plans,ops,references,archive}/` directories exist (empty with `.gitkeep` counts)
+   - For `microservice`: each `layer2` module directory has the four-piece entry kit (CLAUDE.md + AGENTS.md + README.md + docs/)
+
+   Full naming / placement / layering rules: see [`../project-onboarding/references/doc-convention.md`](../project-onboarding/references/doc-convention.md). The convention is the source of truth; this check is its mechanical enforcement.
+
 2. **Frontmatter check**: Scan all memory files for YAML frontmatter
    - Files without `---` frontmatter → suggest adding name/description/type
    - User confirms each before writing
@@ -273,7 +281,7 @@ Output format:
 
 ### Target Skeletons
 
-See `references/config-spec.md` for full skeleton definitions per project type. Key principle:
+See `references/config-spec.md` for full skeleton definitions per project type. For the directory skeleton corresponding to each `project_type` (standalone / monorepo / microservice), see [`../project-onboarding/references/doc-convention.md` §3](../project-onboarding/references/doc-convention.md). Key principle:
 
 | Dimension | Enforced | Recommended | Free |
 |-----------|----------|-------------|------|

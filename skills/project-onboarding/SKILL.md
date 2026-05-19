@@ -43,9 +43,32 @@ You read and analyze these to extract facts — but never modify them, because
 changing source during onboarding would be out of scope and risky.
 
 **Doc Zone (write with user approval):**
-Files this skill generates or takes over: CLAUDE.md, docs/OVERVIEW.md,
-memory files. You write or edit these after the user reviews the content
-and the security check passes.
+Files this skill generates or takes over:
+- `CLAUDE.md` (root + per-microservice-module)
+- `AGENTS.md` (root + per-microservice-module)
+- `README.md` (root + per-microservice-module) — **only-if-missing** policy
+- `docs/OVERVIEW.md`
+- `docs/architecture-traps.md` — **append-only** policy
+- `docs/{plans,ops,references,archive}/.gitkeep` — created only when the directory does not yet exist
+- memory files
+
+`README.md` and `architecture-traps.md` are governed by the **Existing File Policy** below.
+You write or edit these after the user reviews the content and the security
+check passes. Full naming / placement / layering rules are defined in
+[`references/doc-convention.md`](references/doc-convention.md).
+
+### Existing File Policy
+
+When a Doc Zone file already exists in the project, the default action depends on the file:
+
+| File | Default if exists | User options |
+|---|---|---|
+| `CLAUDE.md` | Keep & enhance | Keep / Patch / Rebuild / Skip |
+| `AGENTS.md` | Keep & enhance | Keep / Patch / Rebuild / Skip |
+| `README.md` | **Skip** (human-authored, never overwritten) | Skip / Patch (header section only) |
+| `docs/OVERVIEW.md` | Keep | Keep / Patch / Rebuild / Skip |
+| `docs/architecture-traps.md` | **Append only** (preserve historical entries) | Append / Skip |
+| `docs/{plans,ops,references,archive}/` | Skip `.gitkeep` creation if the directory exists (with or without files) | — |
 
 **Zone Transition:** If a file like CLAUDE.md already exists in the project,
 it starts in Source Zone (read-only). When the user explicitly chooses
@@ -189,8 +212,13 @@ Output a scan report:
 1. CLAUDE.md — {if exists: [Keep & enhance] / [Patch conflicts] / [Rebuild] / [Skip]}
                 {if not exists: [Generate] / [Skip]}
 2. {other AI file} rules — [Merge into CLAUDE.md] / [Ignore]?
-3. docs/OVERVIEW.md — [Generate] / [Skip]?
+3. AGENTS.md — {if exists: [Keep] / [Patch] / [Rebuild] / [Skip]}
+                {if not exists: [Generate] / [Skip]}
+4. docs/ skeleton (OVERVIEW.md + architecture-traps.md + 4 subdirs plans/ops/references/archive) — [Generate] / [Skip]?
+5. Project type confirmation: detected `{detected_type}` based on heuristics ({hit_signals}) — [Confirm] / [Override → standalone / monorepo / microservice]?
 ```
+
+The detection heuristics for project type and the corresponding skeletons are defined in [`references/doc-convention.md` §3](references/doc-convention.md).
 
 **Wait for user confirmation before proceeding to Phase 1.**
 
@@ -203,9 +231,12 @@ Based on Phase 0 results and user choices, generate documentation files.
 ### Output Strategy
 
 | Project Type | Files Generated |
-|-------------|----------------|
-| Single-module | Root `CLAUDE.md` + `docs/OVERVIEW.md` |
-| Monorepo | Root `CLAUDE.md` + per-module `CLAUDE.md` + `docs/OVERVIEW.md` |
+|---|---|
+| `standalone` | Root: `CLAUDE.md` + `AGENTS.md` + `README.md` (only-if-missing); `docs/OVERVIEW.md` + `docs/architecture-traps.md` + `.gitkeep` in `docs/{plans,ops,references,archive}/` |
+| `monorepo` | Same as `standalone` (root-only flat layout). Submodules typically have only `README.md`; if the project already has per-module `CLAUDE.md` configured, leave them alone — they're audited under the existing `SKELETONS["monorepo"]["module"]` rules in doc-garden. |
+| `microservice` | Same as `standalone` at the root, **plus** for each service subdirectory: replicate the full four-piece entry kit (`CLAUDE.md` + `AGENTS.md` + `README.md` + `docs/`) |
+
+> Full naming / placement / layering / AGENTS.md template specification lives in [`references/doc-convention.md`](references/doc-convention.md). When generating, pick the skeleton per §3 decision tree. **AGENTS.md template is NOT inlined here — see `references/doc-convention.md` §4.**
 
 ### Handling Existing CLAUDE.md
 
@@ -341,6 +372,53 @@ Skip if no port configuration found.}
 4. **Template is maximum, not minimum** — no ports in config = no ports
    section; no .env = no environment section
 
+### Phase 1 Generation Steps
+
+For each file type approved in Phase 0.4, apply the rule below. Files the user
+chose Skip for are not touched. Follow the order strictly so AGENTS.md can link
+to OVERVIEW.md that already exists.
+
+1. **Root `CLAUDE.md`** — generate / patch / rebuild per user's Phase 0 choice.
+   Template = "CLAUDE.md Template (Root)" section above. Apply Handling
+   Existing CLAUDE.md rules.
+
+2. **Root `AGENTS.md`** — generate / patch / rebuild per user's Phase 0
+   choice. **Template is in [`references/doc-convention.md` §4](references/doc-convention.md)** — read it before generating.
+   - For `microservice`: include the "模块入口" section listing every detected
+     service subdirectory's `AGENTS.md`.
+   - For `standalone` / `monorepo`: omit "模块入口".
+
+3. **Root `README.md`** — **only-if-missing**. If the file does not exist,
+   generate a minimal README from manifest description + extracted
+   build/quickstart commands. If it exists, **always skip** unless the user
+   explicitly opted into "Patch (header section only)".
+
+4. **`docs/OVERVIEW.md`** — generate / patch / rebuild per user's Phase 0
+   choice. Template = "OVERVIEW.md Template" section above.
+
+5. **`docs/architecture-traps.md`** — **append-only**. If the file does not
+   exist, create it with this seed body:
+   ```markdown
+   # 架构陷阱 / Architecture Traps
+
+   > 调试超过 30 分钟的问题落在这里。每条格式：日期 + 现象 + 根因 + 修复。
+
+   ```
+   If the file exists, **never rewrite or reorder existing entries**. New
+   findings from this onboarding session are appended at the bottom under a
+   new dated `## YYYY-MM-DD` heading.
+
+6. **`docs/{plans,ops,references,archive}/`** — for each of the four
+   subdirectories: if the directory does not exist, create it and add
+   `.gitkeep`. If the directory already exists (with or without files), **do
+   not** create `.gitkeep` and do not modify the directory.
+
+7. **Per-microservice-module four-piece kit** — only if `project_type ==
+   microservice`. For each detected service subdirectory: apply rules
+   1–6 inside that subdirectory (root-relative paths become module-relative).
+   Module-level `AGENTS.md` uses the per-service variant from
+   doc-convention.md §4 (points back to root, omits "模块入口").
+
 ### Phase 1 Confirmation
 
 Run security check (see below), then present output to user:
@@ -348,10 +426,19 @@ Run security check (see below), then present output to user:
 ```
 ## Phase 1 Output
 
-Generated files (pending your approval):
-1. CLAUDE.md (root) — {n} lines
-2. {module}/CLAUDE.md — {n} lines (if monorepo)
-3. docs/OVERVIEW.md — {n} lines
+Generated / modified files (pending your approval):
+
+Root:
+1. CLAUDE.md — {n} lines [generated|patched|rebuilt|kept]
+2. AGENTS.md — {n} lines [generated|patched|rebuilt|kept|skipped]
+3. README.md — [generated (was missing) | skipped (exists)]
+4. docs/OVERVIEW.md — {n} lines [generated|patched|rebuilt|kept]
+5. docs/architecture-traps.md — [seeded | appended | kept]
+6. docs/{plans,ops,references,archive}/ — [created with .gitkeep | already exists]
+
+{if microservice, repeat 1–6 for each service subdirectory}
+
+Skipped: {list files the user chose Skip for, or that fell under only-if-missing}
 
 Please review for accuracy. Tell me anything that needs correction.
 
