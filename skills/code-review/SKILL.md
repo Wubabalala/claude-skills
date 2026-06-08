@@ -38,7 +38,9 @@ Always executed. Language- and framework-agnostic checks.
 ### Layer 2: Project-Specific Checks (`.claude/review-checklist.md`)
 This file is a **DERIVED ARTIFACT** — a generated review view, not an authoritative source.
 
-The authoritative source is the project's `architecture-traps.md` hierarchy plus any other project docs used during checklist generation.
+The authoritative sources are the project's `architecture-traps.md` hierarchy,
+`docs/TRUTH_SOURCES.md`, `docs/references/*-truth-source.md`, and hard rules
+in `AGENTS.md`. The checklist is only the review-facing derived view.
 
 ### review-checklist.md Lifecycle
 
@@ -48,18 +50,23 @@ On review trigger:
 2. Check for .claude/review-checklist.md in project root.
    - Exists → load it as the current Layer 2 review view.
    - Missing → execute generation flow:
-     a. Read project CLAUDE.md
+     a. Read project CLAUDE.md and AGENTS.md hard rules
      b. Read discovered architecture-traps.md files
-     c. Read other key docs and MEMORY.md (if present)
-     d. Extract check items → generate draft → present to user for confirmation
-     e. Write to .claude/review-checklist.md after user confirms
+     c. Read docs/TRUTH_SOURCES.md and docs/references/*-truth-source.md
+     d. Read MEMORY.md only for supplemental context if present
+     e. Extract check items → generate draft → present to user for confirmation
+     f. Write to .claude/review-checklist.md after user confirms
 3. User explicitly says "update review-checklist.md" → re-run generation flow.
 ```
 
 **Generation rules**:
 - Preferred item format follows `references/checklist-schema.md` v2.3 schema
 - Legacy single-line v2.1 checklist items are still supported through the fallback rules in `references/checklist-schema.md`
+- Every generated v2.3 item MUST include a `source:` path pointing to the trap,
+  truth source, or AGENTS.md rule that produced it
 - Extract from constraint language: "trap", "never", "must", "don't", "always"
+- Extract high-confidence truth-source rules from structured `Review rule:` and
+  `**TRUTH**:` lines first; free-text truth-source scanning is low-confidence fallback
 - Extract from convention language: "use X for", "standard pattern", "required"
 - Extract from architecture decisions that must not be violated
 - Keep total items between 15-30; merge similar items if over
@@ -184,10 +191,11 @@ Apply the discovery and merge rules from `references/traps-integration.md`.
 Fixed rules (no implementer freedom):
 
 1. Load `<repo_root>/docs/architecture-traps.md` if it exists.
-2. For each file in this review's scope, walk upward to find the nearest module root using the module-root heuristics in `references/traps-integration.md`.
-3. For each unique module root found in step 2, load `<module_root>/docs/architecture-traps.md` if it exists.
-4. **Do NOT scan all modules in the repo** — only load module traps for modules touched by this review scope.
-5. Merge precedence for the same `trap_id`: module-level overrides repo-level (closer scope wins).
+2. Load `<repo_root>/docs/TRUTH_SOURCES.md` and `<repo_root>/docs/references/*-truth-source.md` if they exist.
+3. For each file in this review's scope, walk upward to find the nearest module root using the module-root heuristics in `references/traps-integration.md`.
+4. For each unique module root found in step 3, load `<module_root>/docs/architecture-traps.md` and `<module_root>/docs/references/*-truth-source.md` if they exist.
+5. **Do NOT scan all modules in the repo** — only load module traps/truth sources for modules touched by this review scope.
+6. Merge precedence for the same `trap_id`: module-level overrides repo-level (closer scope wins).
 
 Additional rules:
 

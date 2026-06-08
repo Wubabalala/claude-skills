@@ -14,6 +14,7 @@
 ```json
 {
   "project_type": "microservice | monorepo | standalone",
+  "doc_system_level": "simple | standard",
   "doc_hierarchy": {
     "layer1": "CLAUDE.md",
     "layer2": ["module-a/CLAUDE.md", "module-b/CLAUDE.md"],
@@ -57,8 +58,21 @@
 ```
 
 **Required fields**: `project_type`, `doc_hierarchy.layer1`
-**Optional fields**: `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `ignore_path_patterns`, `generic_path_fallbacks`, `skip_bare_filenames`, `fact_patterns`, `entity_patterns`, `entity_policy_file`
+**Optional fields**: `doc_system_level`, `layer2`, `docs`, `doc_patterns`, `path_resolvers`, `environment_domains`, `staleness_threshold_days`, `ignore_paths`, `ignore_url_prefixes`, `ignore_path_patterns`, `generic_path_fallbacks`, `skip_bare_filenames`, `fact_patterns`, `entity_patterns`, `entity_policy_file`
 **Never stored**: memory directory path (derived at runtime from cwd)
+
+### `doc_system_level`
+
+Documentation depth, independent from `project_type`.
+
+| Value | Meaning | Convention check |
+|---|---|---|
+| `simple` | Phase 0/1 entry layer | Root triplet + `docs/OVERVIEW.md` |
+| `standard` | Phase 2b governance layer | `simple` + traps + truth sources + quick reference + refs + plans/ops/archive + review lifecycle readiness |
+
+Default: `standard` for backwards compatibility. A microservice project may
+temporarily be `simple` during first-pass onboarding, but validation emits a
+warning because service-level governance has not been established.
 
 ### `doc_patterns`
 

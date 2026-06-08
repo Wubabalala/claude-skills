@@ -51,6 +51,7 @@ class Finding:
 
 DEFAULT_CONFIG = {
     "project_type": "standalone",
+    "doc_system_level": "standard",
     "doc_hierarchy": {"layer1": "CLAUDE.md"},
     "doc_patterns": ["CLAUDE.md", "AGENTS.md"],
     "path_resolvers": [
@@ -279,8 +280,20 @@ def generate_draft_config(cwd: str) -> dict:
             }
         }
 
+    doc_system_level = DEFAULT_CONFIG["doc_system_level"]
+    existing_config_path = os.path.join(cwd, ".claude", "doc-garden.json")
+    if os.path.exists(existing_config_path):
+        try:
+            with open(existing_config_path, encoding="utf-8") as f:
+                existing_config = json.load(f)
+            if existing_config.get("doc_system_level") in ("simple", "standard"):
+                doc_system_level = existing_config["doc_system_level"]
+        except (OSError, json.JSONDecodeError):
+            pass
+
     config = {
         "project_type": project_type,
+        "doc_system_level": doc_system_level,
         "doc_hierarchy": {
             "layer1": layer1,
         },
@@ -1745,8 +1758,9 @@ def run_audit(cwd: str, config: dict = None) -> list:
         has_doc_patterns = bool(config.get("doc_patterns"))
         for err in schema_errors:
             is_missing_layer1 = err == "Missing required field: doc_hierarchy.layer1"
+            is_warning = err.startswith("WARNING:")
             severity = (Severity.WARNING
-                        if (is_missing_layer1 and has_doc_patterns)
+                        if (is_warning or (is_missing_layer1 and has_doc_patterns))
                         else Severity.CRITICAL)
             findings.append(Finding(
                 drift_type=DriftType.CONFIG_SCHEMA_WARNING,
@@ -2000,7 +2014,7 @@ def _section_contains_keyword(section_title: str, keyword: str) -> bool:
 
 @dataclass
 class NormalizeItem:
-    category: str          # 'missing_section' | 'missing_frontmatter' | 'sunken_index' | 'missing_doc'
+    category: str          # 'missing_section' | 'missing_frontmatter' | 'sunken_index' | 'missing_doc' | 'lifecycle_readiness'
     file: str              # which file
     detail: str            # what's wrong
     suggestion: str        # what to do
@@ -2069,14 +2083,16 @@ def check_skeleton(cwd: str, config: dict) -> list:
 
 
 def check_doc_convention(cwd: str, config: dict) -> list:
-    """Audit root triplet + docs skeleton + per-microservice-module four-piece kit.
+    """Audit root triplet + docs skeleton + lifecycle readiness.
 
-    Source of truth: ../project-onboarding/references/doc-convention.md §3.
+    Source of truth: ../project-onboarding/references/doc-convention.md.
     Aligned with SKELETONS three-type taxonomy (standalone / monorepo / microservice).
+    doc_system_level controls depth: simple = entry docs; standard = governance docs.
     All findings emit auto_level="suggest" (no auto-fix).
     """
     items = []
     project_type = config.get("project_type", "standalone")
+    doc_system_level = config.get("doc_system_level", "standard")
 
     # 1. Root triplet
     for fname in ("CLAUDE.md", "AGENTS.md", "README.md"):
@@ -2089,30 +2105,63 @@ def check_doc_convention(cwd: str, config: dict) -> list:
                 auto_level="suggest",
             ))
 
-    # 2. docs/ required files
-    for relpath in ("docs/OVERVIEW.md", "docs/architecture-traps.md"):
+    # 2. simple-level docs: enough for first-pass project entry.
+    for relpath in ("docs/OVERVIEW.md",):
         if not os.path.exists(os.path.join(cwd, relpath)):
             items.append(NormalizeItem(
                 category="missing_doc",
                 file=relpath,
-                detail=f"docs/ required file missing: {relpath}",
+                detail=f"simple doc system required file missing: {relpath}",
                 suggestion=f"Generate {relpath} per doc-convention.md §1",
                 auto_level="suggest",
             ))
 
-    # 3. docs/ four subdirectories (existence; .gitkeep counts because os.path.isdir is true either way)
-    for subdir in ("plans", "ops", "references", "archive"):
-        dpath = os.path.join(cwd, "docs", subdir)
-        if not os.path.isdir(dpath):
+    if doc_system_level == "standard":
+        # 3. standard-level governance docs
+        for relpath in ("docs/architecture-traps.md", "docs/TRUTH_SOURCES.md", "docs/QUICK_REFERENCE.md"):
+            if not os.path.exists(os.path.join(cwd, relpath)):
+                items.append(NormalizeItem(
+                    category="missing_doc",
+                    file=relpath,
+                    detail=f"standard doc system required file missing: {relpath}",
+                    suggestion=f"Generate {relpath} per doc-convention.md",
+                    auto_level="suggest",
+                ))
+
+        # 4. docs/ governance subdirectories (existence; .gitkeep counts because os.path.isdir is true either way)
+        for subdir in ("plans", "ops", "references", "archive"):
+            dpath = os.path.join(cwd, "docs", subdir)
+            if not os.path.isdir(dpath):
+                items.append(NormalizeItem(
+                    category="missing_doc",
+                    file=f"docs/{subdir}/",
+                    detail=f"standard docs/ subdirectory missing: {subdir}",
+                    suggestion=f"Create docs/{subdir}/ (per doc-convention.md §2)",
+                    auto_level="suggest",
+                ))
+
+        ref_dir = Path(cwd) / "docs" / "references"
+        truth_source_files = list(ref_dir.glob("*-truth-source.md")) if ref_dir.is_dir() else []
+        if not truth_source_files:
             items.append(NormalizeItem(
                 category="missing_doc",
-                file=f"docs/{subdir}/",
-                detail=f"docs/ subdirectory missing: {subdir}",
-                suggestion=f"Create docs/{subdir}/ (per doc-convention.md §2)",
+                file="docs/references/*-truth-source.md",
+                detail="standard doc system has no domain truth source file",
+                suggestion="Create at least one docs/references/<domain>-truth-source.md per TRUTH_SOURCES.md",
                 auto_level="suggest",
             ))
 
-    # 4. microservice: each layer2 module's four-piece kit
+        review_checklist = os.path.join(cwd, ".claude", "review-checklist.md")
+        if not os.path.exists(review_checklist):
+            items.append(NormalizeItem(
+                category="lifecycle_readiness",
+                file=".claude/review-checklist.md",
+                detail="standard doc system has no derived review checklist",
+                suggestion="Run code-review checklist generation after traps/truth sources are established",
+                auto_level="suggest",
+            ))
+
+    # 5. microservice: each layer2 module's four-piece kit
     if project_type == "microservice":
         hierarchy = config.get("doc_hierarchy", {})
         # Deduplicate module directories — layer2 may contain both svc/CLAUDE.md and svc/AGENTS.md
@@ -2292,6 +2341,7 @@ def format_normalize_report(items: list, project_name: str = "") -> str:
         "missing_section": "Missing Required Sections",
         "missing_frontmatter": "Missing Frontmatter",
         "sunken_index": "Unindexed Memory Files",
+        "lifecycle_readiness": "Review Lifecycle Gaps",
     }
 
     for cat, cat_items in by_cat.items():
@@ -2373,6 +2423,17 @@ def validate_config(config: dict) -> list:
 
     if "project_type" not in config:
         errors.append("Missing required field: project_type")
+    else:
+        project_type = config.get("project_type")
+        if project_type not in ("standalone", "monorepo", "microservice"):
+            errors.append("project_type must be one of: standalone, monorepo, microservice")
+
+    doc_system_level = config.get("doc_system_level", "standard")
+    if doc_system_level not in ("simple", "standard"):
+        errors.append("doc_system_level must be one of: simple, standard")
+    elif config.get("project_type") == "microservice" and doc_system_level == "simple":
+        errors.append("WARNING: microservice projects in simple doc_system_level only have root entry docs; upgrade to standard for service-level governance")
+
     if "doc_hierarchy" not in config:
         errors.append("Missing required field: doc_hierarchy")
     else:

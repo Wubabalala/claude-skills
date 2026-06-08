@@ -48,8 +48,9 @@ Files this skill generates or takes over:
 - `AGENTS.md` (root + per-microservice-module)
 - `README.md` (root + per-microservice-module) — **only-if-missing** policy
 - `docs/OVERVIEW.md`
-- `docs/architecture-traps.md` — **append-only** policy
-- `docs/{plans,ops,references,archive}/.gitkeep` — created only when the directory does not yet exist
+- Phase 2b governance docs: `docs/architecture-traps.md` (append-only),
+  `docs/TRUTH_SOURCES.md`, `docs/QUICK_REFERENCE.md`,
+  `docs/references/*-{ref,truth-source}.md`, and `docs/{plans,ops,archive}/.gitkeep`
 - memory files
 
 `README.md` and `architecture-traps.md` are governed by the **Existing File Policy** below.
@@ -107,8 +108,10 @@ Phase 0: Detect & Scan (read-only)
     ↓ Present assessment → User confirms actions
 Phase 1: Generate Core Docs (CLAUDE.md + OVERVIEW.md)
     ↓ Present output → User confirms → Optionally continue
-Phase 2: Deep Dive (interactive knowledge capture → memory files)
+Phase 2a: Deep Dive (interactive knowledge capture → memory files)
     ↓ Recommend dimensions → User selects → Execute per dimension
+Phase 2b: Governance Upgrade (optional → standard doc system)
+    ↓ Re-scan → generate traps / truth sources / quick reference / review checklist seed
 
 Security check runs before ANY file is written to disk.
 ```
@@ -214,7 +217,7 @@ Output a scan report:
 2. {other AI file} rules — [Merge into CLAUDE.md] / [Ignore]?
 3. AGENTS.md — {if exists: [Keep] / [Patch] / [Rebuild] / [Skip]}
                 {if not exists: [Generate] / [Skip]}
-4. docs/ skeleton (OVERVIEW.md + architecture-traps.md + 4 subdirs plans/ops/references/archive) — [Generate] / [Skip]?
+4. docs/ skeleton (simple: OVERVIEW.md only; Phase 2b can upgrade to standard with traps / truth sources / quick reference / refs / plans-ops-archive) — [Generate] / [Skip]?
 5. Project type confirmation: detected `{detected_type}` based on heuristics ({hit_signals}) — [Confirm] / [Override → standalone / monorepo / microservice]?
 ```
 
@@ -232,7 +235,7 @@ Based on Phase 0 results and user choices, generate documentation files.
 
 | Project Type | Files Generated |
 |---|---|
-| `standalone` | Root: `CLAUDE.md` + `AGENTS.md` + `README.md` (only-if-missing); `docs/OVERVIEW.md` + `docs/architecture-traps.md` + `.gitkeep` in `docs/{plans,ops,references,archive}/` |
+| `standalone` | Root: `CLAUDE.md` + `AGENTS.md` + `README.md` (only-if-missing); `docs/OVERVIEW.md`; optional `.claude/doc-garden.json` with `doc_system_level: "simple"` |
 | `monorepo` | Same as `standalone` (root-only flat layout). Submodules typically have only `README.md`; if the project already has per-module `CLAUDE.md` configured, leave them alone — they're audited under the existing `SKELETONS["monorepo"]["module"]` rules in doc-garden. |
 | `microservice` | Same as `standalone` at the root, **plus** for each service subdirectory: replicate the full four-piece entry kit (`CLAUDE.md` + `AGENTS.md` + `README.md` + `docs/`) |
 
@@ -396,26 +399,13 @@ to OVERVIEW.md that already exists.
 4. **`docs/OVERVIEW.md`** — generate / patch / rebuild per user's Phase 0
    choice. Template = "OVERVIEW.md Template" section above.
 
-5. **`docs/architecture-traps.md`** — **append-only**. If the file does not
-   exist, create it with this seed body:
-   ```markdown
-   # 架构陷阱 / Architecture Traps
+5. **Optional `.claude/doc-garden.json` seed** — only if the user approved
+   doc-garden config creation. Write `doc_system_level: "simple"` so later
+   audits do not treat a fresh Phase 1 project as standard.
 
-   > 调试超过 30 分钟的问题落在这里。每条格式：日期 + 现象 + 根因 + 修复。
-
-   ```
-   If the file exists, **never rewrite or reorder existing entries**. New
-   findings from this onboarding session are appended at the bottom under a
-   new dated `## YYYY-MM-DD` heading.
-
-6. **`docs/{plans,ops,references,archive}/`** — for each of the four
-   subdirectories: if the directory does not exist, create it and add
-   `.gitkeep`. If the directory already exists (with or without files), **do
-   not** create `.gitkeep` and do not modify the directory.
-
-7. **Per-microservice-module four-piece kit** — only if `project_type ==
+6. **Per-microservice-module four-piece kit** — only if `project_type ==
    microservice`. For each detected service subdirectory: apply rules
-   1–6 inside that subdirectory (root-relative paths become module-relative).
+   1–5 inside that subdirectory (root-relative paths become module-relative).
    Module-level `AGENTS.md` uses the per-service variant from
    doc-convention.md §4 (points back to root, omits "模块入口").
 
@@ -433,16 +423,15 @@ Root:
 2. AGENTS.md — {n} lines [generated|patched|rebuilt|kept|skipped]
 3. README.md — [generated (was missing) | skipped (exists)]
 4. docs/OVERVIEW.md — {n} lines [generated|patched|rebuilt|kept]
-5. docs/architecture-traps.md — [seeded | appended | kept]
-6. docs/{plans,ops,references,archive}/ — [created with .gitkeep | already exists]
+5. .claude/doc-garden.json — [seeded simple | skipped]
 
-{if microservice, repeat 1–6 for each service subdirectory}
+{if microservice, repeat 1–5 for each service subdirectory}
 
 Skipped: {list files the user chose Skip for, or that fell under only-if-missing}
 
 Please review for accuracy. Tell me anything that needs correction.
 
-Continue to Phase 2 (deep dive)? [Continue] / [Done for now]
+Continue to Phase 2a (deep dive) or Phase 2b (governance upgrade)? [Phase 2a] / [Phase 2b] / [Done for now]
 
 ---
 ⭐ Useful? → github.com/Wubabalala/claude-skills (star helps others find it)
@@ -453,7 +442,7 @@ Continue to Phase 2 (deep dive)? [Continue] / [Done for now]
 
 ---
 
-## Phase 2: Deep Dive (Interactive Knowledge Capture)
+## Phase 2a: Deep Dive (Interactive Knowledge Capture)
 
 Optional phase. Only runs if user chooses to continue after Phase 1.
 
@@ -481,7 +470,7 @@ user selects which to capture.**
 Present to user:
 
 ```
-## Phase 2: Deep Dive Recommendations
+## Phase 2a: Deep Dive Recommendations
 
 Based on scan results, these dimensions likely contain knowledge
 that cannot be derived from code alone:
@@ -544,9 +533,43 @@ and storage location fallback chain.
 
 ---
 
+## Phase 2b: Governance Upgrade (Standard Doc System)
+
+Optional phase. Runs after Phase 1 or after Phase 2a when the user wants the
+project to move from `simple` entry docs to `standard` governance docs.
+
+### Step 2b.1: Re-scan
+
+Re-run a targeted scan before generating governance docs. Do not rely only on
+Phase 0 data; standard docs need deeper facts than the simple entry layer.
+
+### Step 2b.2: Generate Standard Governance Drafts
+
+Generate only files the user approves:
+
+- `docs/architecture-traps.md` — append-only trap log. Seed only if missing.
+- `docs/TRUTH_SOURCES.md` — index of domain truth sources using the format in
+  `references/doc-convention.md` §2.1.
+- `docs/QUICK_REFERENCE.md` — volatile facts such as line counts, large files,
+  ports, and fast lookup entries.
+- `docs/references/*-ref.md` — code anchors by domain.
+- `docs/references/*-truth-source.md` — domain invariants by domain.
+- `docs/{plans,ops,archive}/` — create missing directories with `.gitkeep`.
+- `.claude/review-checklist.md` — seed only after traps/truth sources exist
+  and the user confirms code-review should own the derived checklist.
+
+### Step 2b.3: Config Update
+
+If `.claude/doc-garden.json` exists, update `doc_system_level` to `standard`
+after user confirmation. If it does not exist, propose a minimal config with
+`doc_system_level: "standard"` and the detected `project_type`.
+
+---
+
 ## Security Check
 
-Before writing ANY file to disk (Phase 1 docs or Phase 2 memory files),
+Before writing ANY file to disk (Phase 1 docs, Phase 2a memory files, or
+Phase 2b governance docs),
 run the security scan procedure. It blocks writes until all findings are
 resolved by the user. See `references/security-check.md` for full scan
 rules, sensitive content types, redaction format, and blocking behavior.

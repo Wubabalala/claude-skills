@@ -70,6 +70,7 @@ This is a **guided interactive flow**, not an auto-generate-and-save.
 
 **Step 1: Scan** — call `generate_draft_config(cwd)` which returns:
 - Detected project type (heuristic, may be wrong)
+- Detected or preserved doc system level (`simple` or `standard`)
 - Discovered CLAUDE.md files → proposed layer2 list
 - IPs extracted from root CLAUDE.md → attempted env domain grouping
 - Discovery metadata (`_discovery` key)
@@ -78,6 +79,7 @@ This is a **guided interactive flow**, not an auto-generate-and-save.
 ```
 I scanned your project and detected:
 - Type: {detected_type} ({claude_md_count} CLAUDE.md files found)
+- Doc system level: {simple|standard}
 - Modules: {layer2 list}
 - IPs found: {discovered_ips}
 - Environment domains: {auto-parsed or "needs your input"}
@@ -88,11 +90,12 @@ Here's the proposed config:
 
 Please review:
 1. Is the project type correct?
-2. Are all modules listed? Any missing or extra?
-3. Are the environment domains correctly grouped?
+2. Is the doc system level correct? (`simple` = entry docs only, `standard` = governance docs + review lifecycle)
+3. Are all modules listed? Any missing or extra?
+4. Are the environment domains correctly grouped?
    (If IPs are under "_unorganized", please tell me which
     environment each IP belongs to: test/prod/local)
-4. Is 14 days a good staleness threshold for this project?
+5. Is 14 days a good staleness threshold for this project?
 ```
 
 **Step 3: Confirm** — user reviews and provides corrections:
@@ -240,11 +243,14 @@ Output format:
 
    **Convention check** (`check_doc_convention()`, added alongside the skeleton check) additionally verifies:
    - Root triplet exists: `CLAUDE.md` / `AGENTS.md` / `README.md`
-   - `docs/OVERVIEW.md` + `docs/architecture-traps.md` exist
-   - `docs/{plans,ops,references,archive}/` directories exist (empty with `.gitkeep` counts)
+   - `simple`: `docs/OVERVIEW.md` exists
+   - `standard`: `docs/architecture-traps.md`, `docs/TRUTH_SOURCES.md`, `docs/QUICK_REFERENCE.md`, `docs/references/*-truth-source.md`, and `docs/{plans,ops,references,archive}/` exist
+   - `standard`: `.claude/review-checklist.md` exists as a derived code-review lifecycle artifact
    - For `microservice`: each `layer2` module directory has the four-piece entry kit (CLAUDE.md + AGENTS.md + README.md + docs/)
 
-   Full naming / placement / layering rules: see [`../project-onboarding/references/doc-convention.md`](../project-onboarding/references/doc-convention.md). The convention is the source of truth; this check is its mechanical enforcement.
+   Full naming / placement / layering rules live in the project-onboarding
+   skill's doc-convention reference. The convention is the source of truth;
+   this check is its mechanical enforcement.
 
 2. **Frontmatter check**: Scan all memory files for YAML frontmatter
    - Files without `---` frontmatter → suggest adding name/description/type
@@ -273,6 +279,10 @@ Output format:
 ### Unindexed Memory Files (N)
 | File | Issue | Suggestion | Level |
 |------|-------|------------|-------|
+
+### Review Lifecycle Gaps (N)
+| File | Issue | Suggestion | Level |
+|------|-------|------------|-------|
 ```
 
 **Levels**: `auto` (no confirmation), `semi-auto` (confirm each), `suggest` (user decides)
@@ -281,7 +291,7 @@ Output format:
 
 ### Target Skeletons
 
-See `references/config-spec.md` for full skeleton definitions per project type. For the directory skeleton corresponding to each `project_type` (standalone / monorepo / microservice), see [`../project-onboarding/references/doc-convention.md` §3](../project-onboarding/references/doc-convention.md). Key principle:
+See `references/config-spec.md` for full skeleton definitions per project type. For the directory skeleton corresponding to each `project_type` (standalone / monorepo / microservice), use the project-onboarding skill's doc-convention reference. Key principle:
 
 | Dimension | Enforced | Recommended | Free |
 |-----------|----------|-------------|------|
