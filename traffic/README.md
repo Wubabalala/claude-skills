@@ -1,8 +1,8 @@
-## Traffic Summary (updated 2026-08-24)
+## Traffic Summary (updated 2026-08-31)
 
 | Metric | Total |
 |--------|-------|
-| Clones | 2715 |
-| Views  | 351 |
+| Clones | 2833 |
+| Views  | 390 |
 
 Raw data: [data.json](data.json)
